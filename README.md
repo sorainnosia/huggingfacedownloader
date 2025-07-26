@@ -2,9 +2,10 @@
 
 A tiny Huggingface repository downloader.
 
-Download files from HuggingFace repository easily, parallel 4 files download. If url supports range, the file will be downloaded in chunks.
+Download files from HuggingFace repository easily, support parallel files download. If url supports range, the file will be downloaded in chunks.
 
 ## Example
+Download `moonshotai/Kimi-K2-Instruct` with `4` files parallel at a time.
 ```
 huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -m 4
 ```
