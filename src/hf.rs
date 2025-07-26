@@ -21,7 +21,11 @@ pub struct RepoFile {
 }
 
 pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, repo: &str, mut multi: Arc<MultiProgress>) -> Result<Vec<RepoFile>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("https://huggingface.co/api/models/{}", repo);
+	let mut repo_type = "models".to_string();
+	if let Some(c) = &context.config {
+		repo_type = c.repo_type.to_string();
+	}
+    let url = format!("https://huggingface.co/api/{}/{}", repo_type, repo);
     let client = reqwest::Client::new();
 
     let resp = client

@@ -9,7 +9,6 @@ lazy_static! {
     pub static ref TASK_HANDLES: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 }
 
-
 #[derive(Debug)]
 pub struct AsyncTaskWait {
     semaphore: Arc<Semaphore>,

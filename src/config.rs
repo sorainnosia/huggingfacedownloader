@@ -8,7 +8,8 @@ use crate::async_taskwait::AsyncTaskWait;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
-    pub max_parallel: u32
+    pub max_parallel: u32,
+	pub repo_type: String
 }
 
 #[derive(Clone, Debug)]
@@ -32,7 +33,8 @@ impl AppContext {
 impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
-            max_parallel: 4
+            max_parallel: 4,
+			repo_type: "models".to_string()
         }
     }
 }

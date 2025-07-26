@@ -38,7 +38,7 @@ pub async fn smart_download(
 	let url2 = url.to_string();
 	let filename2 = filename.to_string();
 	
-	context.taskwait.wait_for_slot();
+	_ = context.taskwait.wait_for_slot();
 	let handle = tokio::spawn(async move {
 		let result = if range_ok && total_size.is_some() {
 			download_in_chunks(context.clone(), &client2.clone(), url2.as_str(), filename2.as_str(), total_size.unwrap(), chunk_count, cancel_notify, multi.clone()).await
