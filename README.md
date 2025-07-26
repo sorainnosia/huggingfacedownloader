@@ -9,7 +9,7 @@ Download `models` `moonshotai/Kimi-K2-Instruct` with `4` files parallel at a tim
 ```
 huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -m 4
 ```
-Download `datasets` `moonshotai/Kimi-K2-Instruct` with `4` files parallel at a time.
+Download `datasets` `facebook/flores` with `2` files parallel at a time.
 ```
-huggingfacedownloader -j facebook/flores -m 4 -t datasets
+huggingfacedownloader -j facebook/flores -m 2 -t datasets
 ```
