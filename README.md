@@ -20,3 +20,7 @@ Download `models` `moonshotai/Kimi-K2-Instruct` with `1` files parallel at a tim
 ```
 huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -m 1 -c 4
 ```
+Download `models` `private/repository` with `1` files parallel at a time with each file `4` chunks and `-k api_key`
+```
+huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -m 1 -c 4 -k s3cr3tap1k3y...
+```
