@@ -36,7 +36,7 @@ pub struct Args {
 	#[arg(short = 'm', long, default_value = "1", help = "Max parallel file downloads")]
     pub max_parallel: u32,
 	
-	#[arg(short = 'c', long, default_value = "4", help = "Max chunk per file download")]
+	#[arg(short = 'c', long, default_value = "7", help = "Max chunk per file download")]
     pub max_chunk: u32,
 	
 	#[arg(short = 't', long, default_value = "models", help = "Repository Type : models, datasets or spaces")]

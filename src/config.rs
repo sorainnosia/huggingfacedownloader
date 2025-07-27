@@ -38,7 +38,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
             max_parallel: 1,
-			max_chunk: 4,
+			max_chunk: 7,
 			repo_type: "models".to_string()
         }
     }
