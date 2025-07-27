@@ -4,11 +4,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 use serde_json::{*};
+use crate::taskwait;
 use crate::async_taskwait::AsyncTaskWait;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub max_parallel: u32,
+	pub max_chunk: u32,
 	pub repo_type: String
 }
 
@@ -17,12 +19,14 @@ pub struct AppContext {
     pub is_running: Arc<Mutex<bool>>,
     pub json: Arc<Mutex<Option<Value>>>,
 	pub config: Option<AppConfig>,
-	pub taskwait: Arc<AsyncTaskWait>
+	pub taskwait: Arc<Mutex<Option<AsyncTaskWait>>>
 }
 
 impl AppContext {
     pub fn new() -> Self {
-        AppContext { is_running: Arc::new(Mutex::new(false)), json: Arc::new(Mutex::new(None)), config: None, taskwait: Arc::new(AsyncTaskWait::new(4)) }
+        AppContext { is_running: Arc::new(Mutex::new(false)), json: Arc::new(Mutex::new(None)), config: None,
+			taskwait: Arc::new(Mutex::new(None))
+		}
     }
 	
 	pub fn run(&mut self) {
@@ -33,7 +37,8 @@ impl AppContext {
 impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
-            max_parallel: 4,
+            max_parallel: 1,
+			max_chunk: 4,
 			repo_type: "models".to_string()
         }
     }

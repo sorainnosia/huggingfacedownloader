@@ -5,7 +5,6 @@ use tokio::task::JoinHandle;
 use futures::future::join_all;
 
 lazy_static! {
-    pub static ref ISRUNNING: Arc<Mutex<bool>> = Arc::new(Mutex::new(true));
     pub static ref TASK_HANDLES: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 }
 
@@ -31,22 +30,12 @@ impl AsyncTaskWait {
         self.semaphore.available_permits()
     }
 
-    pub async fn wait_for_slot(&self) -> bool {
-        let is_running = {
-            *ISRUNNING.lock().unwrap()
-        };
-        
-        if !is_running {
-            return false;
-        }
-
+    pub async fn wait_for_slot(&self) -> Result<tokio::sync::SemaphorePermit<'_>, tokio::sync::AcquireError> {
         match self.acquire().await {
             Ok(permit) => {
-                // Return the permit immediately as the caller will hold it
-                std::mem::forget(permit);
-                true
+                Ok(permit)
             }
-            Err(_) => false,
+            Err(x) => Err(x)
         }
     }
 }
@@ -64,12 +53,4 @@ pub async fn wait_all_tasks() {
 pub fn add_task_handle(handle: JoinHandle<()>) {
     let mut handles = TASK_HANDLES.lock().unwrap();
     handles.push(handle);
-}
-
-pub fn is_running() -> bool {
-    *ISRUNNING.lock().unwrap()
-}
-
-pub fn set_running(running: bool) {
-    *ISRUNNING.lock().unwrap() = running;
 }

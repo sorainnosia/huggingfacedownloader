@@ -4,6 +4,8 @@ use serde_json;
 use std::sync::Arc;
 use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
 use crate::smart_dl;
+use crate::taskwait;
+use crate::async_taskwait::AsyncTaskWait;
 use crate::config::{AppContext, AppConfig};
 
 #[derive(Parser)]
@@ -48,7 +50,17 @@ pub async fn download_repo_files(
 	mut multi: Arc<MultiProgress>
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let target_dir = repo.replace("/", "_");
-
+	
+	let mut max_parallel = 4;
+	let mut max_chunk = 4;
+	if let Some(conf) = &context.config {
+		max_parallel = conf.max_parallel;
+		max_chunk = conf.max_chunk;
+	}
+	
+	println!("Max Parallel {}", max_parallel);
+	println!("Max Chunk {}", max_chunk);
+	
     for f in files {
         let remote_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, f.rfilename);
         let local_path = format!("{}/{}", target_dir, f.rfilename);
@@ -61,14 +73,26 @@ pub async fn download_repo_files(
         if let Some(parent) = std::path::Path::new(&local_path).parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-
-		let mut max_parallel = 4;
-		if let Some(conf) = &context.config {
-			max_parallel = conf.max_parallel;
+		
+		{
+			let run = *taskwait::ISRUNNING.lock().unwrap();
+			if run == false {
+				return Ok(());
+			}
 		}
 		
         //println!("⬇️  Downloading {}", remote_url);
-        smart_dl::smart_download(context.clone(), &client, &remote_url, &local_path, max_parallel as usize, Arc::new(tokio::sync::Notify::new()), multi.clone()).await?;
+		{
+			let context2 = context.clone();
+			let client2 = client.clone();
+			let remote_url2 = remote_url.clone();
+			let local_path2 = local_path.clone();
+			let multi2 = multi.clone();
+			
+			taskwait::wait_available_thread(max_parallel as i32);
+			
+			let handle = smart_dl::smart_download(context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, Arc::new(tokio::sync::Notify::new()), multi.clone()).await;
+		}
     }
 
     Ok(())

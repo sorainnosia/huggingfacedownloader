@@ -17,9 +17,9 @@ use tokio::fs;
 use std::path::{PathBuf, Path};
 use tokio::io::AsyncReadExt;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::task::JoinHandle;
 use crate::config::AppContext;
-use crate::async_taskwait::AsyncTaskWait;
-use crate::async_taskwait;
+use crate::taskwait;
 
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
@@ -28,11 +28,12 @@ pub async fn smart_download(
     client: &Client,
     url: &str,
     filename: &str,
+	parallel_count: usize,
     chunk_count: usize,
     cancel_notify: Arc<Notify>,
 	mut multi: Arc<MultiProgress>
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let head = client.head(url).send().await?;
+) -> JoinHandle<()> {
+    let head = client.head(url).send().await.unwrap();
     let range_ok = head.headers().get("accept-ranges")
         .map_or(false, |v| v == "bytes");
 
@@ -44,20 +45,17 @@ pub async fn smart_download(
 	let url2 = url.to_string();
 	let filename2 = filename.to_string();
 	
-	_ = context.taskwait.wait_for_slot();
 	let handle = tokio::spawn(async move {
 		let result = if range_ok && total_size.is_some() {
 			download_in_chunks(context.clone(), &client2.clone(), url2.as_str(), filename2.as_str(), total_size.unwrap(), chunk_count, cancel_notify, multi.clone()).await
 		} else {
 			download_whole_with_progress(context.clone(), &client2.clone(), url2.as_str(), filename2.as_str(), cancel_notify.clone(), multi.clone()).await
 		};
+		taskwait::new_thread_available();
 	});
-	async_taskwait::add_task_handle(handle);
 	
-	Ok(())
+	handle
 }
-
-
 
 pub async fn is_cancel() -> Result<(), Box<dyn std::error::Error + Send + Sync>> { 
 	if CANCELLED.load(Ordering::SeqCst) {
@@ -82,14 +80,28 @@ pub async fn download_whole_with_progress(
         .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
         .unwrap()
         .progress_chars("#>-"));
-
+		
     let mut stream = response.bytes_stream();
     let mut file = File::create(filename).await?;
+	let filename2 = filename.to_string();
+	tokio::spawn({
+		let cancel_notify = cancel_notify.clone();
+		
+		async move {
+			signal::ctrl_c().await.ok();
+			CANCELLED.store(true, Ordering::SeqCst);
+			cancel_notify.notify_waiters();
+			*taskwait::ISRUNNING.lock().unwrap() = false;
+			let _ = fs::remove_file(&filename2).await;
+			
+			eprintln!("🧹 Cancelled by Ctrl+C. Temporary files cleaned.");
+		}
+	});
+	
 
     tokio::select! {
         _ = cancel_notify.notified() => {
             println!("🛑 Cancelled while downloading full: {}", url);
-            drop(file);
             let _ = remove_file(filename).await;
             bar.finish_and_clear();
             return Ok(());
@@ -100,6 +112,13 @@ pub async fn download_whole_with_progress(
                 let data = chunk?;
                 file.write_all(&data).await?;
                 bar.inc(data.len() as u64);
+				
+				if CANCELLED.load(Ordering::SeqCst) {
+					*taskwait::ISRUNNING.lock().unwrap() = false;
+					drop(file);
+					fs::remove_file(&filename).await;
+					break;
+				}
             }
             //bar.finish_with_message("Done");
 			bar.finish_and_clear();
@@ -124,6 +143,11 @@ pub async fn download_in_chunks(
     cancel_notify: Arc<Notify>,
 	mut multi: Arc<MultiProgress>
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+	
+	if CANCELLED.load(Ordering::SeqCst) {
+		return Err("Download cancelled".into());
+	}
+	
 	let chunk_size = total_size / chunk_count as u64;
 	let mut tmp_paths = Vec::new();
 
@@ -157,6 +181,7 @@ pub async fn download_in_chunks(
 			signal::ctrl_c().await.ok();
 			CANCELLED.store(true, Ordering::SeqCst);
 			cancel_notify.notify_waiters();
+			*taskwait::ISRUNNING.lock().unwrap() = false;
 
 			for i in 0..chunk_count {
 				let path = tmp_dir.join(format!("{}.tmp{}", tmp_filename_base, i));
@@ -210,6 +235,7 @@ pub async fn download_in_chunks(
 						file.write_all(&chunk).await.unwrap();
 						
 						if CANCELLED.load(Ordering::SeqCst) {
+							*taskwait::ISRUNNING.lock().unwrap() = false;
 							drop(file);
 							fs::remove_file(&tmp_path).await;
 							break;
@@ -227,11 +253,7 @@ pub async fn download_in_chunks(
 		return Err("Download cancelled".into());
 	}
 
-	pb2.finish_with_message(format!("Downloaded {}", url));
-	//multi.join();
-	//pb2.finish();
-	//pb2.clear();
-	//pb2.set_position(pb2.length().unwrap_or(0));
+	pb2.finish_with_message(format!("Downloaded {}", url)); 
 	
 	// Join all parts into final file
 	let mut output = File::create(filename).await?;
@@ -249,6 +271,7 @@ pub async fn download_in_chunks(
 			output.write_all(&buffer[..n]).await?;
 		}
 	}
+	
 	for i in 0..chunk_count {
 		let path = temp_chunk_path(filename, i);
 		let _ = fs::remove_file(&path).await;
