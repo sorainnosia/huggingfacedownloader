@@ -120,8 +120,8 @@ pub async fn download_whole_with_progress(
 					break;
 				}
             }
-            //bar.finish_with_message("Done");
-			bar.finish_and_clear();
+            bar.finish_with_message("Done");
+			//bar.finish_and_clear();
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         } => {}
     }
@@ -220,6 +220,7 @@ pub async fn download_in_chunks(
 					eprintln!("🛑 Chunk {} canceled", i);
 					return;
 				}
+				
 				res = req.send() => {
 					let mut resp = match res {
 						Ok(r) => r,
@@ -269,6 +270,13 @@ pub async fn download_in_chunks(
 				break;
 			}
 			output.write_all(&buffer[..n]).await?;
+		}
+		
+		if CANCELLED.load(Ordering::SeqCst) {
+			*taskwait::ISRUNNING.lock().unwrap() = false;
+			drop(output);
+			fs::remove_file(&filename).await;
+			break;
 		}
 	}
 	
