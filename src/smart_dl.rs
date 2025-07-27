@@ -262,7 +262,7 @@ pub async fn download_in_chunks(
 		let tmp_path = temp_chunk_path(filename, i);
 		let mut tmp_file = File::open(&tmp_path).await?;
 		
-		let mut buffer = [0u8; 8192];
+		let mut buffer = [0u8; 204800];
 
 		loop {
 			let n = tmp_file.read(&mut buffer).await?;
@@ -270,11 +270,17 @@ pub async fn download_in_chunks(
 				break;
 			}
 			output.write_all(&buffer[..n]).await?;
+			
+			if CANCELLED.load(Ordering::SeqCst) {
+				*taskwait::ISRUNNING.lock().unwrap() = false;
+				fs::remove_file(&filename).await;
+				break;
+			}
 		}
 		
 		if CANCELLED.load(Ordering::SeqCst) {
 			*taskwait::ISRUNNING.lock().unwrap() = false;
-			drop(output);
+				drop(output);
 			fs::remove_file(&filename).await;
 			break;
 		}
