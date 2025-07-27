@@ -57,6 +57,15 @@ pub async fn smart_download(
 	Ok(())
 }
 
+
+
+pub async fn is_cancel() -> Result<(), Box<dyn std::error::Error + Send + Sync>> { 
+	if CANCELLED.load(Ordering::SeqCst) {
+		return Err(Box::<dyn std::error::Error + Send + Sync>::from("Error"));
+	}
+	return Ok(());
+}
+
 pub async fn download_whole_with_progress(
 	context: Arc<AppContext>,
     client: &Client,
@@ -92,7 +101,7 @@ pub async fn download_whole_with_progress(
                 file.write_all(&data).await?;
                 bar.inc(data.len() as u64);
             }
-            bar.finish_with_message("Done");
+            //bar.finish_with_message("Done");
 			bar.finish_and_clear();
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         } => {}
@@ -119,10 +128,17 @@ pub async fn download_in_chunks(
 	let mut tmp_paths = Vec::new();
 
 	let pb = Arc::new(multi.add(ProgressBar::new(total_size)));
+	//let pb = Arc::new(ProgressBar::new(total_size));
 	pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {prefix:.bold}")
         .unwrap()
         .progress_chars("#>-"));
+
+	let name_only = Path::new(filename)
+		.file_name()             // Option<&OsStr>
+		.and_then(|s| s.to_str()) // Option<&str>
+		.unwrap_or("unknown");
+	pb.set_prefix(format!("{}", name_only));
 
 	// Handle Ctrl+C signal
 	let signal_set = Arc::new(cancel_notify.clone());
@@ -151,8 +167,11 @@ pub async fn download_in_chunks(
 		}
 	});
 
+	let pb2 = pb.clone();
+	let pb3 = pb2.clone();
 	// Start download tasks
 	let futures = (0..chunk_count).map(|i| {
+		let pb4 = pb3.clone();
 		let start = i as u64 * chunk_size;
 		let end = if i == chunk_count - 1 {
 			total_size - 1
@@ -163,11 +182,10 @@ pub async fn download_in_chunks(
 		let url = url.to_string();
 		let client = client.clone();
 		let cancel_notify = cancel_notify.clone();
-		let pb = pb.clone();
+		
 		let tmp_path = temp_chunk_path(filename, i);
 
 		tmp_paths.push(tmp_path.clone());
-
 		async move {
 			let range = format!("bytes={}-{}", start, end);
 			let req = client.get(&url).header(RANGE, range);
@@ -188,10 +206,16 @@ pub async fn download_in_chunks(
 
 					let mut file = File::create(&tmp_path).await.unwrap();
 					while let Some(chunk) = resp.chunk().await.unwrap() {
-						pb.inc(chunk.len() as u64);
+						pb4.inc(chunk.len() as u64);
 						file.write_all(&chunk).await.unwrap();
+						
+						if CANCELLED.load(Ordering::SeqCst) {
+							drop(file);
+							fs::remove_file(&tmp_path).await;
+							break;
+						}
 					}
-					println!("📦 Chunk {} done", i);
+					//println!("📦 Chunk {} done", i);
 				}
 			}
 		}
@@ -203,8 +227,12 @@ pub async fn download_in_chunks(
 		return Err("Download cancelled".into());
 	}
 
-	pb.finish_with_message("Done");
-
+	pb2.finish_with_message(format!("Downloaded {}", url));
+	//multi.join();
+	//pb2.finish();
+	//pb2.clear();
+	//pb2.set_position(pb2.length().unwrap_or(0));
+	
 	// Join all parts into final file
 	let mut output = File::create(filename).await?;
 	for i in 0..chunk_count {

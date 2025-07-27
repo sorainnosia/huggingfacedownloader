@@ -67,7 +67,7 @@ pub async fn download_repo_files(
 			max_parallel = conf.max_parallel;
 		}
 		
-        println!("⬇️  Downloading {}", remote_url);
+        //println!("⬇️  Downloading {}", remote_url);
         smart_dl::smart_download(context.clone(), &client, &remote_url, &local_path, max_parallel as usize, Arc::new(tokio::sync::Notify::new()), multi.clone()).await?;
     }
 
