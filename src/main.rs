@@ -33,19 +33,25 @@ pub struct Args {
     #[arg(short = 'j', long, help = "huggingface username/repository")]
     pub repo: String,
 	
-	#[arg(short = 'm', long, default_value = "1", help = "Max parallel downloads")]
+	#[arg(short = 'm', long, default_value = "1", help = "Max parallel file downloads")]
     pub max_parallel: u32,
 	
-	#[arg(short = 'c', long, default_value = "4", help = "Max chunk per download")]
+	#[arg(short = 'c', long, default_value = "4", help = "Max chunk per file download")]
     pub max_chunk: u32,
 	
-	#[arg(short = 't', long, default_value = "models", help = "models or datasets")]
+	#[arg(short = 't', long, default_value = "models", help = "Repository Type : models, datasets or spaces")]
     pub repo_type: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
+
+	if args.repo_type.to_lowercase() != "models".to_string() && args.repo_type.to_lowercase() !="datasets" &&
+		args.repo_type.to_lowercase() !="spaces" {
+		println!("Repository type must be either models/datasets/spaces");
+		return Ok(());
+	}
 
 	let mut ctx = AppContext::new();
 	ctx.run();
