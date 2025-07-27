@@ -272,15 +272,13 @@ pub async fn download_in_chunks(
 			output.write_all(&buffer[..n]).await?;
 			
 			if CANCELLED.load(Ordering::SeqCst) {
-				*taskwait::ISRUNNING.lock().unwrap() = false;
-				fs::remove_file(&filename).await;
 				break;
 			}
 		}
 		
 		if CANCELLED.load(Ordering::SeqCst) {
 			*taskwait::ISRUNNING.lock().unwrap() = false;
-				drop(output);
+			drop(output);
 			fs::remove_file(&filename).await;
 			break;
 		}
