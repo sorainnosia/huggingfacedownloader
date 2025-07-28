@@ -80,15 +80,24 @@ pub async fn download_whole_with_progress(
     let response = client.get(url).send().await?;
     let total = response.content_length().unwrap_or(0);
 
-    let bar = multi.add(ProgressBar::new(total));
-    bar.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+    let pb = Arc::new(multi.add(ProgressBar::new(total)));
+	let pb2 = pb.clone();
+    
+	pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {prefix:.bold}")
         .unwrap()
         .progress_chars("#>-"));
 		
-    let mut stream = response.bytes_stream();
+	let name_only = Path::new(filename)
+		.file_name()             // Option<&OsStr>
+		.and_then(|s| s.to_str()) // Option<&str>
+		.unwrap_or("unknown");
+	pb.set_prefix(format!("{}", name_only));
+    
+	let mut stream = response.bytes_stream();
     let mut file = File::create(filename).await?;
 	let filename2 = filename.to_string();
+	
 	tokio::spawn({
 		let cancel_notify = cancel_notify.clone();
 		
@@ -103,34 +112,33 @@ pub async fn download_whole_with_progress(
 		}
 	});
 	
-
     tokio::select! {
         _ = cancel_notify.notified() => {
             println!("🛑 Cancelled while downloading full: {}", url);
-            let _ = remove_file(filename).await;
-            bar.finish_and_clear();
-            return Ok(());
+            let _ = fs::remove_file(filename).await;
+            
+			return Ok(());
         }
 
         _ = async {
             while let Some(chunk) = stream.next().await {
                 let data = chunk?;
                 file.write_all(&data).await?;
-                bar.inc(data.len() as u64);
+                pb2.inc(data.len() as u64);
 				
 				if CANCELLED.load(Ordering::SeqCst) {
 					*taskwait::ISRUNNING.lock().unwrap() = false;
 					drop(file);
-					fs::remove_file(&filename).await;
+					let _ = fs::remove_file(&filename).await;
 					break;
 				}
             }
-            bar.finish_with_message("Done");
-			//bar.finish_and_clear();
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            
+			Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         } => {}
     }
 
+	pb.finish_with_message(format!("Downloaded {}", url));
     Ok(())
 }
 
@@ -157,7 +165,7 @@ pub async fn download_in_chunks(
 	let mut tmp_paths = Vec::new();
 
 	let pb = Arc::new(multi.add(ProgressBar::new(total_size)));
-	//let pb = Arc::new(ProgressBar::new(total_size));
+	
 	pb.set_style(ProgressStyle::default_bar()
         .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {prefix:.bold}")
         .unwrap()
@@ -172,16 +180,18 @@ pub async fn download_in_chunks(
 	// Handle Ctrl+C signal
 	let signal_set = Arc::new(cancel_notify.clone());
 	let tmp_dir = PathBuf::from(filename)
-    .parent()
-    .map(Path::to_path_buf)
-    .unwrap_or_else(|| PathBuf::from("."));
+		.parent()
+		.map(Path::to_path_buf)
+		.unwrap_or_else(|| PathBuf::from("."));
 	let tmp_filename_base = PathBuf::from(filename).file_name().unwrap().to_str().unwrap().to_string();
 
 	let tmp_cleanup = tmp_paths.clone();
+	
 	tokio::spawn({
 		let cancel_notify = cancel_notify.clone();
 		let tmp_filename_base = tmp_filename_base.clone();
 		let tmp_dir = tmp_dir.clone();
+		
 		async move {
 			signal::ctrl_c().await.ok();
 			CANCELLED.store(true, Ordering::SeqCst);
@@ -199,7 +209,7 @@ pub async fn download_in_chunks(
 
 	let pb2 = pb.clone();
 	let pb3 = pb2.clone();
-	// Start download tasks
+	
 	let futures = (0..chunk_count).map(|i| {
 		let pb4 = pb3.clone();
 		let start = i as u64 * chunk_size;
@@ -222,6 +232,7 @@ pub async fn download_in_chunks(
 
 			tokio::select! {
 				_ = cancel_notify.notified() => {
+					let _ = fs::remove_file(tmp_path).await;
 					eprintln!("🛑 Chunk {} canceled", i);
 					return;
 				}
@@ -243,7 +254,7 @@ pub async fn download_in_chunks(
 						if CANCELLED.load(Ordering::SeqCst) {
 							*taskwait::ISRUNNING.lock().unwrap() = false;
 							drop(file);
-							fs::remove_file(&tmp_path).await;
+							let _ = fs::remove_file(&tmp_path).await;
 							break;
 						}
 					}
@@ -261,7 +272,6 @@ pub async fn download_in_chunks(
 
 	pb2.finish_with_message(format!("Downloaded {}", url)); 
 	
-	// Join all parts into final file
 	let mut output = File::create(filename).await?;
 	for i in 0..chunk_count {
 		let tmp_path = temp_chunk_path(filename, i);
@@ -284,7 +294,7 @@ pub async fn download_in_chunks(
 		if CANCELLED.load(Ordering::SeqCst) {
 			*taskwait::ISRUNNING.lock().unwrap() = false;
 			drop(output);
-			fs::remove_file(&filename).await;
+			let _ = fs::remove_file(&filename).await;
 			break;
 		}
 	}
