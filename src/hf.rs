@@ -21,11 +21,12 @@ pub struct RepoFile {
     pub rfilename: String,
 }
 
-pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, repo: &str, mut multi: Arc<MultiProgress>) -> Result<Vec<RepoFile>, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Client, repo: &str, mut multi: Arc<MultiProgress>) -> Result<Vec<RepoFile>, Box<dyn std::error::Error + Send + Sync>> {
 	let mut repo_type = "models".to_string();
 	if let Some(c) = &context.config {
 		repo_type = c.repo_type.to_string();
 	}
+	
     let url = format!("https://huggingface.co/api/{}/{}", repo_type, repo);
     let client = reqwest::Client::new();
 
@@ -42,12 +43,11 @@ pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, repo: &str, 
 }
 
 pub async fn fetch_sha256_hash(client: &Client, url: &str) -> Option<String> {
-    let hash_url = format!("{}.sha256", url); // e.g., https://.../model.bin.sha256
+    let hash_url = format!("{}.sha256", url);
 
     match client.get(&hash_url).send().await {
         Ok(resp) if resp.status().is_success() => {
             if let Ok(text) = resp.text().await {
-                // Handle both: "<hash>" or "<hash>  filename"
                 Some(text.split_whitespace().next()?.to_string())
             } else {
                 None
@@ -172,6 +172,7 @@ pub async fn download_repo_files(
 			
 			let ct = context.taskwait.clone();
 			let tw = &mut *ct.lock().unwrap();
+			
 			if let Some(c) = tw {
 				let permit: OwnedSemaphorePermit = c.acquire_owned().await?;
 			

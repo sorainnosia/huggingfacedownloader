@@ -54,6 +54,7 @@ pub async fn smart_download(
 		} else {
 			download_whole_with_progress(context.clone(), &client2.clone(), url2.as_str(), filename2.as_str(), cancel_notify.clone(), multi.clone()).await
 		};
+		
 		if permit2.is_none() {
 			taskwait::new_thread_available();
 		}
@@ -67,6 +68,10 @@ pub async fn is_cancel() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 		return Err(Box::<dyn std::error::Error + Send + Sync>::from("Error"));
 	}
 	return Ok(());
+}
+
+fn temp_chunk_path(base: &str, index: usize) -> PathBuf {
+    PathBuf::from(format!("{}.tmp{}", base, index))
 }
 
 pub async fn download_whole_with_progress(
@@ -140,10 +145,6 @@ pub async fn download_whole_with_progress(
 
 	pb.finish_with_message(format!("Downloaded {}", url));
     Ok(())
-}
-
-fn temp_chunk_path(base: &str, index: usize) -> PathBuf {
-    PathBuf::from(format!("{}.tmp{}", base, index))
 }
 
 pub async fn download_in_chunks(

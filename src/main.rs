@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate lazy_static;
 
-use reqwest::{Client, header, header::RANGE, header::AUTHORIZATION, header::HeaderValue};
+use reqwest::{Client, header::HeaderMap, header::RANGE, header::AUTHORIZATION, header::HeaderValue};
 use scraper::{Html, Selector};
 use tokio::{
     fs::{File, remove_file},
@@ -30,7 +30,7 @@ use crate::async_taskwait::AsyncTaskWait;
 
 #[derive(Parser)]
 pub struct Args {
-    #[arg(short = 'j', long, help = "huggingface username/repository")]
+    #[arg(short = 'j', long, help = "HuggingFace username/repository")]
     pub repo: String,
 	
 	#[arg(short = 'm', long, default_value = "1", help = "Max parallel file downloads")]
@@ -60,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	let mut repo_type = "models".to_string();
 	ctx.run();
     config::set_config(&mut ctx);
+	
 	if let Some(mut c) = ctx.config {
 		c.max_parallel = args.max_parallel;
 		c.max_chunk = args.max_chunk;
@@ -75,21 +76,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let repo = args.repo;
 
 	let m = Arc::new(MultiProgress::new());
-    let files = hf::fetch_huggingface_repo_files(context.clone(), &repo, m.clone()).await?;
+    
     let mut client = reqwest::Client::new();
 	if args.token.is_empty() == false {
 		client = Client::builder()
 		.default_headers({
-			let mut headers = header::HeaderMap::new();
+			let mut headers = HeaderMap::new();
 			headers.insert(
-				header::AUTHORIZATION,
-				header::HeaderValue::from_str(&format!("Bearer {}", args.token)).unwrap(),
+				AUTHORIZATION,
+				HeaderValue::from_str(&format!("Bearer {}", args.token)).unwrap(),
 			);
 			headers
 		})
 		.build()?;
 	}
 	
+	let files = hf::fetch_huggingface_repo_files(context.clone(), &client, &repo, m.clone()).await?;
     hf::download_repo_files(context.clone(), repo_type.to_string(), client, &repo, files, m.clone()).await?;
 
 	taskwait::wait_all_tasks().await;
