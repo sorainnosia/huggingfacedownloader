@@ -3,7 +3,7 @@
 A tiny Huggingface repository downloader.
 
 Download files from HuggingFace repository easily, support parallel files download by default `1` file at a time, to override use `-m 2` for 2 files at a time.
-If url supports range, the file will be downloaded parallel in chunks by default `4` chunks, to override use `-c 1` for 1 chunk.
+If url supports range, the file will be downloaded parallel in chunks by default `7` chunks, to override use `-c 4` for 4 chunk.
 
 Downloader support download of HuggingFace `datasets` and `spaces` other than the default `models`, to override use `-t datasets` for datasets and `-t spaces` for spaces.
 
