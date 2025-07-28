@@ -2,7 +2,7 @@ use reqwest::{Client, header::RANGE};
 use tokio::{
     fs::{File, remove_file},
     io::AsyncWriteExt,
-    sync::{mpsc, Semaphore, Notify},
+    sync::{mpsc, Notify},
     signal,
 };
 use futures_util::StreamExt;
@@ -18,12 +18,14 @@ use std::path::{PathBuf, Path};
 use tokio::io::AsyncReadExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::task::JoinHandle;
+use tokio::sync::{Semaphore, OwnedSemaphorePermit};
 use crate::config::AppContext;
 use crate::taskwait;
 
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
 pub async fn smart_download(
+	permit: Option<OwnedSemaphorePermit>,
 	context: Arc<AppContext>,
     client: &Client,
     url: &str,
@@ -46,12 +48,15 @@ pub async fn smart_download(
 	let filename2 = filename.to_string();
 	
 	let handle = tokio::spawn(async move {
+		let permit2 = permit;
 		let result = if range_ok && total_size.is_some() {
 			download_in_chunks(context.clone(), &client2.clone(), url2.as_str(), filename2.as_str(), total_size.unwrap(), chunk_count, cancel_notify, multi.clone()).await
 		} else {
 			download_whole_with_progress(context.clone(), &client2.clone(), url2.as_str(), filename2.as_str(), cancel_notify.clone(), multi.clone()).await
 		};
-		taskwait::new_thread_available();
+		if permit2.is_none() {
+			taskwait::new_thread_available();
+		}
 	});
 	
 	handle

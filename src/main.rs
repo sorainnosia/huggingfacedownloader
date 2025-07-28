@@ -42,7 +42,6 @@ pub struct Args {
 	#[arg(short = 't', long, default_value = "models", help = "Repository Type : models, datasets or spaces")]
     pub repo_type: String,
 	
-	
 	#[arg(short = 'k', long, default_value = "", help = "HuggingFace token")]
     pub token: String,
 }

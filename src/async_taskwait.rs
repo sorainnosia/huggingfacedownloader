@@ -1,8 +1,8 @@
 // async_taskwait.rs
 use std::sync::{Arc, Mutex};
-use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use futures::future::join_all;
+use tokio::sync::{Semaphore, OwnedSemaphorePermit};
 
 lazy_static! {
     pub static ref TASK_HANDLES: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -24,6 +24,10 @@ impl AsyncTaskWait {
 
     pub async fn acquire(&self) -> Result<tokio::sync::SemaphorePermit<'_>, tokio::sync::AcquireError> {
         self.semaphore.acquire().await
+    }
+
+    pub async fn acquire_owned(&mut self) -> Result<tokio::sync::OwnedSemaphorePermit, tokio::sync::AcquireError> {
+        self.semaphore.clone().acquire_owned().await
     }
 
     pub fn available_permits(&self) -> usize {

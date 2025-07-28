@@ -13,16 +13,8 @@ use crate::async_taskwait::AsyncTaskWait;
 use crate::config::{AppContext, AppConfig};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, BufReader};
+use tokio::sync::{Semaphore, OwnedSemaphorePermit};
 use std::path::Path;
-
-#[derive(Parser)]
-pub struct Args {
-    #[arg(short = 'j', long, help = "huggingface username/repository")]
-    pub repo: String,
-	
-	#[arg(short = 'm', long, default_value = "4", help = "Max parallel downloads")]
-    pub max: String,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct RepoFile {
@@ -171,7 +163,6 @@ pub async fn download_repo_files(
 			}
 		}
 		
-        //println!("⬇️  Downloading {}", remote_url);
 		{
 			let context2 = context.clone();
 			let client2 = client.clone();
@@ -179,9 +170,19 @@ pub async fn download_repo_files(
 			let local_path2 = local_path.clone();
 			let multi2 = multi.clone();
 			
-			taskwait::wait_available_thread(max_parallel as i32);
+			let ct = context.taskwait.clone();
+			let tw = &mut *ct.lock().unwrap();
+			if let Some(c) = tw {
+				let permit: OwnedSemaphorePermit = c.acquire_owned().await?;
 			
-			let handle = smart_dl::smart_download(context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, Arc::new(tokio::sync::Notify::new()), multi.clone()).await;
+				let handle = smart_dl::smart_download(Some(permit), context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, Arc::new(tokio::sync::Notify::new()), multi.clone()).await;
+				taskwait::add_task_handle(handle);
+			} else {
+				taskwait::wait_available_thread(max_parallel as i32);
+				
+				let handle = smart_dl::smart_download(None, context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, Arc::new(tokio::sync::Notify::new()), multi.clone()).await;
+				taskwait::add_task_handle(handle);
+			}
 			
 			if tokio::fs::try_exists(&local_path2).await? {
 				let server_hash = sha_map.get(&remote_url2);
@@ -189,7 +190,6 @@ pub async fn download_repo_files(
 				if let Some(s) = server_hash {
 					if let Ok(c) = client_hash {
 						if s.to_string() == c.to_string() {
-							println!("Hash Matched");
 							continue;
 						} else {
 							//fs::remove_file(&local_path2).await;
