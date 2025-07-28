@@ -19,10 +19,14 @@ use tokio::io::AsyncReadExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::task::JoinHandle;
 use tokio::sync::{Semaphore, OwnedSemaphorePermit};
+use std::pin::Pin;
+use futures::future::ready;
+use std::future::Future;
 use crate::config::AppContext;
 use crate::taskwait;
 
 static CANCELLED: AtomicBool = AtomicBool::new(false);
+static CANCEL_CHECK: u32 = 100;
 
 pub async fn smart_download(
 	permit: Option<OwnedSemaphorePermit>,
@@ -126,16 +130,22 @@ pub async fn download_whole_with_progress(
         }
 
         _ = async {
+			let mut counter = 0;
             while let Some(chunk) = stream.next().await {
                 let data = chunk?;
                 file.write_all(&data).await?;
                 pb2.inc(data.len() as u64);
 				
-				if CANCELLED.load(Ordering::SeqCst) {
-					*taskwait::ISRUNNING.lock().unwrap() = false;
-					drop(file);
-					let _ = fs::remove_file(&filename).await;
-					break;
+				counter = counter + 1;
+				if counter % CANCEL_CHECK == 0 {
+					if CANCELLED.load(Ordering::SeqCst) {
+						*taskwait::ISRUNNING.lock().unwrap() = false;
+						drop(file);
+						let _ = fs::remove_file(&filename).await;
+						break;
+					} else {
+						counter = 0;
+					}
 				}
             }
             
@@ -212,6 +222,7 @@ pub async fn download_in_chunks(
 	let pb3 = pb2.clone();
 	
 	let futures = (0..chunk_count).map(|i| {
+		 
 		let pb4 = pb3.clone();
 		let start = i as u64 * chunk_size;
 		let end = if i == chunk_count - 1 {
@@ -247,16 +258,22 @@ pub async fn download_in_chunks(
 						}
 					};
 
+					let mut counter = 0;
 					let mut file = File::create(&tmp_path).await.unwrap();
 					while let Some(chunk) = resp.chunk().await.unwrap() {
 						pb4.inc(chunk.len() as u64);
 						file.write_all(&chunk).await.unwrap();
 						
-						if CANCELLED.load(Ordering::SeqCst) {
-							*taskwait::ISRUNNING.lock().unwrap() = false;
-							drop(file);
-							let _ = fs::remove_file(&tmp_path).await;
-							break;
+						counter += 1;
+						if counter % CANCEL_CHECK == 0  {
+							if CANCELLED.load(Ordering::SeqCst) {
+								*taskwait::ISRUNNING.lock().unwrap() = false;
+								drop(file);
+								let _ = fs::remove_file(&tmp_path).await;
+								break;
+							} else {
+								counter = 0;
+							}
 						}
 					}
 					//println!("📦 Chunk {} done", i);
@@ -280,6 +297,7 @@ pub async fn download_in_chunks(
 		
 		let mut buffer = [0u8; 204800];
 
+		let mut counter = 0;
 		loop {
 			let n = tmp_file.read(&mut buffer).await?;
 			if n == 0 {
@@ -287,8 +305,13 @@ pub async fn download_in_chunks(
 			}
 			output.write_all(&buffer[..n]).await?;
 			
-			if CANCELLED.load(Ordering::SeqCst) {
-				break;
+			counter += 1;
+			if counter % CANCEL_CHECK == 0 {
+				if CANCELLED.load(Ordering::SeqCst) {
+					break;
+				} else {
+					counter = 0;
+				}
 			}
 		}
 		

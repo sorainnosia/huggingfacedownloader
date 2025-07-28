@@ -10,6 +10,7 @@ lazy_static! {
     pub static ref ISRUNNING: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     pub static ref RUNNING_THREAD: Mutex<i32> = Mutex::new(0);
 	pub static ref TASK_HANDLES: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));	
+	pub static ref CHECK_THREAD_SLEEP: u64 = 500;
 }
 
 pub fn is_running() -> bool {
@@ -33,7 +34,7 @@ pub fn wait_available_thread(parallel: i32) -> bool {
             }
         }
         if is_running() == false { break; }
-        thread::sleep(time::Duration::from_millis(300));
+        thread::sleep(time::Duration::from_millis(*CHECK_THREAD_SLEEP));
     }
     if is_running() == false { return false; }
     return true;
@@ -55,7 +56,7 @@ pub fn wait_all_thread_done() -> bool {
             r = *RUNNING_THREAD.lock().unwrap();
         }
         if r == 0 {
-            thread::sleep(Duration::from_millis(500));
+            thread::sleep(Duration::from_millis(*CHECK_THREAD_SLEEP));
             {
                 r = *RUNNING_THREAD.lock().unwrap();
             }
@@ -64,7 +65,7 @@ pub fn wait_all_thread_done() -> bool {
             }
             if is_running() == false { return false; }
         }
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(*CHECK_THREAD_SLEEP));
     }
 }
 

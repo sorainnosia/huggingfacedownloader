@@ -112,6 +112,7 @@ pub async fn download_repo_files(
 	let mut invalid_files: Vec<String> = vec![];
 	let mut sha_map: HashMap<String, String> = HashMap::new();
 	
+	let cancel_notify = Arc::new(tokio::sync::Notify::new());
     for f in files {
         let mut remote_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, f.rfilename);
 		if repo_type.to_string() == "datasets".to_string() {
@@ -175,13 +176,13 @@ pub async fn download_repo_files(
 			
 			if let Some(c) = tw {
 				let permit: OwnedSemaphorePermit = c.acquire_owned().await?;
-			
-				let handle = smart_dl::smart_download(Some(permit), context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, Arc::new(tokio::sync::Notify::new()), multi.clone()).await;
+
+				let handle = smart_dl::smart_download(Some(permit), context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, cancel_notify.clone(), multi.clone()).await;
 				taskwait::add_task_handle(handle);
 			} else {
 				taskwait::wait_available_thread(max_parallel as i32);
-				
-				let handle = smart_dl::smart_download(None, context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, Arc::new(tokio::sync::Notify::new()), multi.clone()).await;
+
+				let handle = smart_dl::smart_download(None, context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, cancel_notify.clone(), multi.clone()).await;
 				taskwait::add_task_handle(handle);
 			}
 			
