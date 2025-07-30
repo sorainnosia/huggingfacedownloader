@@ -11,7 +11,7 @@ Downloader support resume by default (if URL support it), and download will be r
 
 ## Example
 
-**Download by slicing file with each slice `100MB` in case of connection drops, resume will be faster**
+**Download by slicing file with each slice `100MB` in case of connection drops, resume will be faster (same arguments)**
 ```
 huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -p 100MB
 ```
