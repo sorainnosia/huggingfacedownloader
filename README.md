@@ -10,7 +10,7 @@ Downloader support download of HuggingFace `datasets` and `spaces` other than th
 Downloader support resume by default (if URL support it), and download will be resume on top of completed chunks, to make it better if you are intending to resume use `-p 100MB` option to slice file based on a fix resumable size, you need to use this argument again during re-run.
 
 ## Example
-Download `models` `moonshotai/Kimi-K2-Instruct` with `4` files parallel at a time (default 7 chunks)
+Download `models` `moonshotai/Kimi-K2-Instruct` with `4` files parallel at a time (default 7 chunks per file)
 ```
 huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -m 4
 ```
