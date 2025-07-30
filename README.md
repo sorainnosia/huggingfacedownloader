@@ -10,27 +10,28 @@ Downloader support download of HuggingFace `datasets` and `spaces` other than th
 Downloader support resume by default (if URL support it), and download will be resume on top of completed chunks, to make it better if you are intending to resume use `-p 100MB` option to slice file based on a fix resumable size, you need to use this argument again during re-run.
 
 ## Example
+
+**Download by slicing file with each slice `100MB` in case of connection drops, resume will be faster**
+```
+huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -p 100MB
+```
+
 Download `models` `moonshotai/Kimi-K2-Instruct` with `4` files parallel at a time (default 7 chunks per file)
 ```
 huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -m 4
 ```
 
-Download `datasets` `facebook/flores` with `2` files parallel at a time with 1 chunk per file
+Download `datasets` `facebook/flores` with `2` files parallel at a time with 100MB chunk per file
 ```
-huggingfacedownloader -j facebook/flores -m 2 -t datasets -c 1
-```
-
-Download `models` `private/repository` with `1` files parallel at a time with each file `4` chunks and `-k api_key`
-```
-huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -m 1 -c 4 -k s3cr3tap1k3y...
+huggingfacedownloader -j facebook/flores -m 2 -t datasets -p 100MB
 ```
 
-Download without enabling resumable and if drops, file redownload again
+Download `models` `private/repository` with `1` files parallel at a time `-m 1` with each file `1` chunks `-c 1` and `-k api_key` (private repository) and no intention to resume `-n`
+```
+huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -m 1 -c 1 -n -k s3cr3tap1k3y...
+```
+
+Download without enabling resumable and if drops, need to re-run to download again
 ```
 huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -n
-```
-
-**Download by slicing file with each slice `100MB` in case of connection drops, resume will be faster**
-```
-huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -p 100MB
 ```
