@@ -96,15 +96,18 @@ pub async fn download_repo_files(
     client: reqwest::Client,
     repo: &str,
     files: Vec<RepoFile>,
-	mut multi: Arc<MultiProgress>
+	mut multi: Arc<MultiProgress>,
+	resumable: bool
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let target_dir = repo.replace("/", "_");
 	
 	let mut max_parallel = 4;
 	let mut max_chunk = 4;
+	let mut max_size = None;
 	if let Some(conf) = &context.config {
 		max_parallel = conf.max_parallel;
 		max_chunk = conf.max_chunk;
+		max_size = conf.max_size;
 	}
 	
 	//println!("Max Parallel {}", max_parallel);
@@ -177,12 +180,12 @@ pub async fn download_repo_files(
 			if let Some(c) = tw {
 				let permit: OwnedSemaphorePermit = c.acquire_owned().await?;
 
-				let handle = smart_dl::smart_download(Some(permit), context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, cancel_notify.clone(), multi.clone()).await;
+				let handle = smart_dl::smart_download(Some(permit), context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
 				taskwait::add_task_handle(handle);
 			} else {
 				taskwait::wait_available_thread(max_parallel as i32);
 
-				let handle = smart_dl::smart_download(None, context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, cancel_notify.clone(), multi.clone()).await;
+				let handle = smart_dl::smart_download(None, context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
 				taskwait::add_task_handle(handle);
 			}
 			

@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
 use std::{time::Duration};
 use uuid;
-use clap::Parser;
+use clap::{Parser, ArgAction};
 use serde::Deserialize;
 
 mod config;
@@ -24,6 +24,7 @@ mod async_taskwait;
 mod taskwait;
 mod hf;
 use hf::*;
+use std::num::ParseFloatError;
 use crate::smart_dl::*;
 use crate::config::*;
 use crate::async_taskwait::AsyncTaskWait;
@@ -42,8 +43,52 @@ pub struct Args {
 	#[arg(short = 't', long, default_value = "models", help = "Repository Type : models, datasets or spaces")]
     pub repo_type: String,
 	
-	#[arg(short = 'k', long, default_value = "", help = "HuggingFace token")]
-    pub token: String,
+	#[arg(short = 'k', long, default_value = "", help = "HuggingFace user access token (private repository)")]
+    pub token: String, 
+	
+	#[arg(short = 'p', long, help = "Download file by size slices instead of fix chunk")]
+	pub max_size: Option<String>,
+	
+	#[arg(short = 'n', long, action = ArgAction::SetFalse, default_value_t = true, help = "Turn on to make download non resumable")]
+    pub resumable: bool,
+}
+
+pub fn parse_size_to_bytes(input: &str) -> Result<u64, String> {
+    let input = input.trim().to_uppercase();
+
+    let units = ["PB", "TB", "GB", "MB", "KB", "B"];
+    let mut number_part = input.clone();
+    let mut unit_part = "B";
+
+    for unit in &units {
+        if let Some(idx) = input.find(unit) {
+            number_part = input[..idx].trim().to_string();
+            unit_part = unit;
+            break;
+        }
+    }
+
+    // If only digits, default to bytes
+    if number_part == input {
+        number_part = input.clone();
+        unit_part = "B";
+    }
+
+    let value: f64 = number_part
+        .parse()
+        .map_err(|e: ParseFloatError| format!("Failed to parse number: {}", e))?;
+
+    let multiplier: u64 = match unit_part.to_uppercase().as_str() {
+        "B" => 1,
+        "KB" => 1024,
+        "MB" => 1024_u64.pow(2),
+        "GB" => 1024_u64.pow(3),
+        "TB" => 1024_u64.pow(4),
+        "PB" => 1024_u64.pow(5),
+        _ => return Err(format!("Unknown unit '{}'", unit_part)),
+    };
+
+    Ok((value * multiplier as f64).round() as u64)
 }
 
 #[tokio::main]
@@ -61,10 +106,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	ctx.run();
     config::set_config(&mut ctx);
 	
+	let mut bytes = 0;
+	if let Some(b) = args.max_size {
+		if let Ok(size) = parse_size_to_bytes(&b) {
+			bytes = size;
+		}
+	}
+	
+	let mut resumable = false;
 	if let Some(mut c) = ctx.config {
 		c.max_parallel = args.max_parallel;
 		c.max_chunk = args.max_chunk;
+		if bytes == 0 {
+			c.max_size = None;
+		} else {
+			c.max_size = Some(bytes);
+		}
 		c.repo_type = args.repo_type;
+		c.resumable = args.resumable;
+		resumable = c.resumable;
 		repo_type = c.repo_type.to_string();
 		ctx.taskwait = Arc::new(Mutex::new(Some(AsyncTaskWait::new(c.max_parallel as i32))));
 		ctx.config = Some(c);
@@ -92,7 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	}
 	
 	let files = hf::fetch_huggingface_repo_files(context.clone(), &client, &repo, m.clone()).await?;
-    hf::download_repo_files(context.clone(), repo_type.to_string(), client, &repo, files, m.clone()).await?;
+    hf::download_repo_files(context.clone(), repo_type.to_string(), client, &repo, files, m.clone(), resumable).await?;
 
 	taskwait::wait_all_tasks().await;
     Ok(())

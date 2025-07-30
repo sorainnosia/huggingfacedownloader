@@ -11,7 +11,9 @@ use crate::async_taskwait::AsyncTaskWait;
 pub struct AppConfig {
     pub max_parallel: u32,
 	pub max_chunk: u32,
-	pub repo_type: String
+	pub max_size: Option<u64>,
+	pub repo_type: String,
+	pub resumable: bool
 }
 
 #[derive(Clone, Debug)]
@@ -39,7 +41,9 @@ impl Default for AppConfig {
         AppConfig {
             max_parallel: 1,
 			max_chunk: 7,
-			repo_type: "models".to_string()
+			repo_type: "models".to_string(),
+			max_size: None,
+			resumable: true
         }
     }
 }
