@@ -7,7 +7,7 @@ If url supports range, the file will be downloaded parallel in chunks by default
 
 Downloader support download of HuggingFace `datasets` and `spaces` other than the default `models`, to override use `-t datasets` for datasets and `-t spaces` for spaces.
 
-Downloader support resume by default (if URL support it), and download will be resume on top of completed chunks, to make it better if you are intending to resume use `-p 100MB` option to slice file based on a fix resumable size, you need to use this argument again during re-run.
+Downloader support resume by default (if URL support it), and download will be resume on top of completed chunks, to make it better if you are intending to resume use `-p 100MB` option to slice file based on a fix resumable chunk size, you need to use this argument again during re-run.
 
 ## Example
 
