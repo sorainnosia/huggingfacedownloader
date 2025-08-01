@@ -31,7 +31,7 @@ Download `models` `private/repository` with `1` files parallel at a time `-m 1` 
 huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -m 1 -c 1 -n -k s3cr3tap1k3y...
 ```
 
-Download without enabling resumable and if drops, need to re-run to download again
+Download without enabling resumable and if drops, need to re-download again
 ```
 huggingfacedownloader -j moonshotai/Kimi-K2-Instruct -n
 ```
