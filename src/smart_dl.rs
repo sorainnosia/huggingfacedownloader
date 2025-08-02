@@ -253,8 +253,12 @@ pub async fn download_whole_with_progress(
 		}
 	}
 	
-	pb.finish_with_message(format!("Downloaded {}", url));
-    Ok(())
+	if CANCELLED.load(Ordering::SeqCst) == false {
+		pb.finish_with_message(format!("Downloaded {}", url));
+		Ok(())
+	} else {
+		return Err("Download cancelled".into());
+	}
 }
 
 pub async fn download_in_chunks(
@@ -364,13 +368,14 @@ pub async fn download_in_chunks(
 			
 			if skip_exist == false {
 				let mut max_try2 = max_try;
-				let mut success = false;
+				
 				while max_try2 > 0 {
 					let client2 = client.clone();
 					_ = fs::remove_file(&tmp_path).await;
 					
 					let range = format!("bytes={}-{}", start, end);
 					let req = client2.get(&url).header(RANGE, range);
+					let mut success = false;
 					tokio::select! {
 						_ = cancel_notify.notified() => {
 							eprintln!("🛑 Chunk {} canceled", i);
@@ -477,6 +482,9 @@ pub async fn download_in_chunks(
 			let new_tmp_dir = parent.join("tmp");
 			std::fs::remove_dir(&new_tmp_dir);
 		}
+		
+		return Ok(());
+	} else {
+		return Err("Download cancelled".into());
 	}
-	Ok(())
 }
