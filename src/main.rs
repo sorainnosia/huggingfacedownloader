@@ -40,6 +40,9 @@ pub struct Args {
 	#[arg(short = 'c', long, default_value = "7", help = "Max chunk per file download")]
     pub max_chunk: u32,
 	
+	#[arg(short = 'r', long, default_value = "10", help = "Max chunk per file download")]
+    pub max_try: u32,
+	
 	#[arg(short = 't', long, default_value = "models", help = "Repository Type : models, datasets or spaces")]
     pub repo_type: String,
 	
@@ -68,7 +71,6 @@ pub fn parse_size_to_bytes(input: &str) -> Result<u64, String> {
         }
     }
 
-    // If only digits, default to bytes
     if number_part == input {
         number_part = input.clone();
         unit_part = "B";
@@ -107,23 +109,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     config::set_config(&mut ctx);
 	
 	let mut bytes = 0;
-	if let Some(b) = args.max_size {
+	if let Some(b) = args.max_size.clone() {
 		if let Ok(size) = parse_size_to_bytes(&b) {
 			bytes = size;
 		}
+	} else if args.max_size.is_none() == false {
+		println!("Slice size must be value, eg 100MB");
+		return Ok(());
 	}
 	
 	let mut resumable = false;
+	let mut maxtry = 10;
 	if let Some(mut c) = ctx.config {
 		c.max_parallel = args.max_parallel;
+		c.repo_type = args.repo_type;
+		c.resumable = args.resumable;
 		c.max_chunk = args.max_chunk;
 		if bytes == 0 {
 			c.max_size = None;
 		} else {
 			c.max_size = Some(bytes);
 		}
-		c.repo_type = args.repo_type;
-		c.resumable = args.resumable;
+		maxtry = args.max_try;
 		resumable = c.resumable;
 		repo_type = c.repo_type.to_string();
 		ctx.taskwait = Arc::new(Mutex::new(Some(AsyncTaskWait::new(c.max_parallel as i32))));
@@ -134,7 +141,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 	let mut context = Arc::new(ctx);
     let repo = args.repo;
-
 	let m = Arc::new(MultiProgress::new());
     
     let mut client = reqwest::Client::new();
@@ -152,7 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	}
 	
 	let files = hf::fetch_huggingface_repo_files(context.clone(), &client, &repo, m.clone()).await?;
-    hf::download_repo_files(context.clone(), repo_type.to_string(), client, &repo, files, m.clone(), resumable).await?;
+    hf::download_repo_files(context.clone(), repo_type.to_string(), client, maxtry, &repo, files, m.clone(), resumable).await?;
 
 	taskwait::wait_all_tasks().await;
     Ok(())

@@ -94,6 +94,7 @@ pub async fn download_repo_files(
 	context: Arc<AppContext>,
 	repo_type: String,
     client: reqwest::Client,
+	maxtry: u32,
     repo: &str,
     files: Vec<RepoFile>,
 	mut multi: Arc<MultiProgress>,
@@ -180,12 +181,12 @@ pub async fn download_repo_files(
 			if let Some(c) = tw {
 				let permit: OwnedSemaphorePermit = c.acquire_owned().await?;
 
-				let handle = smart_dl::smart_download(Some(permit), context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
+				let handle = smart_dl::smart_download(Some(permit), context2.clone(), &client2, &remote_url2, &local_path2, maxtry, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
 				taskwait::add_task_handle(handle);
 			} else {
 				taskwait::wait_available_thread(max_parallel as i32);
 
-				let handle = smart_dl::smart_download(None, context2.clone(), &client2, &remote_url2, &local_path2, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
+				let handle = smart_dl::smart_download(None, context2.clone(), &client2, &remote_url2, &local_path2, maxtry, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
 				taskwait::add_task_handle(handle);
 			}
 			
