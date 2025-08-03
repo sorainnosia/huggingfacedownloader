@@ -11,7 +11,7 @@ Downloader support resume by default (if URL support it), and download will be r
 
 # Critical Bug
 
-Bug found in earlier version and CRC Mismatched. Fixed in version 1.1.0.
+Bug found in earlier version CRC Mismatched. Fixed in version 1.1.0.
 
 ## Example
 
