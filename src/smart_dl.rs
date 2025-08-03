@@ -131,7 +131,28 @@ pub fn slice_chunk(total_size: u64, chunk_count: usize, start2: u64) -> Vec<(u64
 	return result;
 }
 
+pub fn slice_chunk_size(total_size: u64, max_size: Option<u64>) -> Vec<(u64, u64, u64)> {
+    let mut result = vec![];
+    if let Some(maxsize) = max_size {
+        if total_size <= maxsize {
+            result.push((0, total_size - 1, total_size));
+        } else {
+            let mut current_pos = 0u64;
+            while current_pos < total_size {
+                let chunk_size = std::cmp::min(maxsize, total_size - current_pos);
+                let start = current_pos;
+                let end = current_pos + chunk_size - 1;
+                result.push((start, end, chunk_size));
+                current_pos += chunk_size;
+            }
+        }
+    } else {
+        result.push((0, total_size - 1, total_size));
+    }
+    result
+}
 
+/*
 pub fn slice_chunk_size(total_size: u64, max_size: Option<u64>) -> Vec<(u64, u64, u64)> {
 	let mut result = vec![];
 	if let Some(maxsize) = max_size {
@@ -151,14 +172,16 @@ pub fn slice_chunk_size(total_size: u64, max_size: Option<u64>) -> Vec<(u64, u64
 				
 				result.push((start, end, maxsize));
 			}
-			if (chunk_count as f64) < chunk_count_f {
-				let remain = total_size - (chunk_count * chunk_count);
-				result.push((chunk_count * maxsize, total_size - 1, remain));
+			let expected_total = chunk_count * maxsize;
+			if expected_total < total_size {
+				let remain = total_size - expected_total;
+				result.push((expected_total, total_size - 1, remain));
 			}
 		}
 	}
 	return result;
 }
+*/
 
 pub async fn download_whole_with_progress(
 	context: Arc<AppContext>,
@@ -211,8 +234,7 @@ pub async fn download_whole_with_progress(
 			_ = cancel_notify.notified() => {
 				println!("🛑 Cancelled while downloading full: {}", url);
 				let _ = fs::remove_file(filename).await;
-				
-				return Ok(());
+				return Err("Download cancelled".into());
 			}
 
 			_ = async {
@@ -236,11 +258,14 @@ pub async fn download_whole_with_progress(
 						}
 					}
 				}
+				
 				if CANCELLED.load(Ordering::SeqCst) == false {
 					success = true;
+					Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+				} else {
+					return Err("Download cancelled".into());
 				}
 				
-				Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
 			} => {}
 		}
 		
@@ -368,18 +393,20 @@ pub async fn download_in_chunks(
 			
 			if skip_exist == false {
 				let mut max_try2 = max_try;
+				let mut success = false;
 				
 				while max_try2 > 0 {
+					success = false;
 					let client2 = client.clone();
 					_ = fs::remove_file(&tmp_path).await;
 					
 					let range = format!("bytes={}-{}", start, end);
 					let req = client2.get(&url).header(RANGE, range);
-					let mut success = false;
 					tokio::select! {
 						_ = cancel_notify.notified() => {
 							eprintln!("🛑 Chunk {} canceled", i);
-							return;
+							//return;
+							return Err("Download cancelled");
 						}
 						
 						res = req.send() => {
@@ -387,7 +414,7 @@ pub async fn download_in_chunks(
 								Ok(r) => r,
 								Err(e) => {
 									eprintln!("❌ Chunk {} failed to start: {}", i, e);
-									return;
+									return Err("Download error");
 								}
 							};
 
@@ -409,6 +436,7 @@ pub async fn download_in_chunks(
 									}
 								}
 							}
+							
 							if CANCELLED.load(Ordering::SeqCst) == false {
 								success = true;
 							}
@@ -423,8 +451,19 @@ pub async fn download_in_chunks(
 						pb4.set_position(0);
 					}
 				}
+				
+				if success {
+					return Ok(());
+				} else {
+					if CANCELLED.load(Ordering::SeqCst) {
+						return Err("Download cancelled".into());
+					} else {
+						return Err("Download error".into());
+					}
+				}
 			} else {
 				pb4.inc(size as u64);
+				return Ok(());
 			}
 		}
 	});
