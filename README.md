@@ -9,6 +9,10 @@ Downloader support download of HuggingFace `datasets` and `spaces` other than th
 
 Downloader support resume by default (if URL support it), and download will be resume on top of completed chunks, to make it better if you are intending to resume use `-p 100MB` option to slice file based on a fix resumable chunk size, you need to use this argument again during re-run.
 
+# Critical Bug
+
+Bug found in earlier version and CRC Mismatched. Fixed in version 1.1.0.
+
 ## Example
 
 **Download by slicing file with each slice `100MB` in case of connection drops, resume will be faster (same arguments)**
