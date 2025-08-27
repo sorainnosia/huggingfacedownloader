@@ -152,37 +152,6 @@ pub fn slice_chunk_size(total_size: u64, max_size: Option<u64>) -> Vec<(u64, u64
     result
 }
 
-/*
-pub fn slice_chunk_size(total_size: u64, max_size: Option<u64>) -> Vec<(u64, u64, u64)> {
-	let mut result = vec![];
-	if let Some(maxsize) = max_size {
-		let chunk_count = total_size / maxsize as u64;
-		let chunk_count_f = total_size as f64 / maxsize as f64;
-		
-		if total_size <= maxsize as u64 {
-			result.push((0, total_size - 1, total_size));
-		} else {
-			for i in 0..chunk_count {
-				let mut start = i as u64 * maxsize;
-				let mut end = if i == chunk_count - 1 {
-					total_size - 1
-				} else {
-					(i as u64 + 1) * maxsize - 1
-				};
-				
-				result.push((start, end, maxsize));
-			}
-			let expected_total = chunk_count * maxsize;
-			if expected_total < total_size {
-				let remain = total_size - expected_total;
-				result.push((expected_total, total_size - 1, remain));
-			}
-		}
-	}
-	return result;
-}
-*/
-
 pub async fn download_whole_with_progress(
 	context: Arc<AppContext>,
     client: &Client,

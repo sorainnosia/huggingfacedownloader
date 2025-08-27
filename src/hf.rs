@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json;
 use std::sync::Arc;
 use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
+use sha1::Sha1;
 use sha2::{Sha256, Digest};
 use tokio::fs;
 use std::collections::HashMap;
@@ -19,6 +20,24 @@ use std::path::Path;
 #[derive(Debug, Deserialize)]
 pub struct RepoFile {
     pub rfilename: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lfs: Option<LfsInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LfsInfo {
+    pub oid: String,  // SHA256 hash for LFS files
+    pub size: i64,
+    #[serde(rename = "pointerSize")]
+    pub pointer_size: i32,
+}
+
+#[derive(Debug)]
+pub struct FileVerificationResult {
+    pub filename: String,
+    pub expected_hash: String,
+    pub actual_hash: String,
+    pub passed: bool,
 }
 
 pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Client, repo: &str, mut multi: Arc<MultiProgress>) -> Result<Vec<RepoFile>, Box<dyn std::error::Error + Send + Sync>> {
@@ -27,18 +46,51 @@ pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Cli
 		repo_type = c.repo_type.to_string();
 	}
 	
-    let url = format!("https://huggingface.co/api/{}/{}", repo_type, repo);
-    let client = reqwest::Client::new();
+    // Use the /tree/main endpoint to get file listings with LFS info
+    let url = format!("https://huggingface.co/api/{}/{}/tree/main", repo_type, repo);
+    
+    //println!("Fetching file list from: {}", url);
 
     let resp = client
         .get(&url)
         .header("User-Agent", "huggingface-downloader")
         .send()
-        .await?
-        .json::<serde_json::Value>()
         .await?;
-
-    let files = serde_json::from_value(resp["siblings"].clone())?;
+        
+    if !resp.status().is_success() {
+        return Err(format!("Failed to fetch repo files: HTTP {}", resp.status()).into());
+    }
+    
+    let json_resp = resp.json::<Vec<serde_json::Value>>().await?;
+    
+    // Debug: print first file to see structure
+    if !json_resp.is_empty() {
+        //println!("Sample file structure: {:#?}", &json_resp[0]);
+    }
+    
+    // Convert JSON array to Vec<RepoFile>
+    let mut files = Vec::new();
+    for item in json_resp {
+        // The API returns files with "path" field, but we expect "rfilename"
+        if let Some(path) = item.get("path").and_then(|p| p.as_str()) {
+            let mut file = RepoFile {
+                rfilename: path.to_string(),
+                lfs: None,
+            };
+            
+            // Check if there's an lfs field
+            if let Some(lfs_data) = item.get("lfs") {
+                if let Ok(lfs_info) = serde_json::from_value::<LfsInfo>(lfs_data.clone()) {
+                    file.lfs = Some(lfs_info);
+                }
+            }
+            
+            files.push(file);
+        }
+    }
+    
+    println!("Found {} files, {} with LFS", files.len(), files.iter().filter(|f| f.lfs.is_some()).count());
+    
     Ok(files)
 }
 
@@ -63,7 +115,13 @@ pub async fn get_sha256_from_etag(client: &Client, url: &str) -> Option<String> 
             .or_else(|| resp.headers().get("etag")) 
         {
             let tag = etag.to_str().ok()?;
-            Some(tag.trim_matches('"').to_string())
+            // Remove quotes and sha256: prefix if present
+            let cleaned = tag.trim_matches('"');
+            if cleaned.starts_with("sha256:") {
+                Some(cleaned.trim_start_matches("sha256:").to_string())
+            } else {
+                Some(cleaned.to_string())
+            }
         } else {
             None
         }
@@ -87,7 +145,121 @@ pub async fn compute_sha256<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn s
     }
 
     let result = hasher.finalize();
-    Ok(format!("{:x}", result))
+    // Use explicit hex encoding like Go's hex.EncodeToString
+    let hex_string = result.iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>();
+    Ok(hex_string)
+}
+
+pub async fn compute_sha1<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let file = File::open(path).await?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha1::new();
+    let mut buffer = [0u8; 8192];
+
+    loop {
+        let n = reader.read(&mut buffer).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+
+    let result = hasher.finalize();
+    // Use explicit hex encoding like Go's hex.EncodeToString
+    let hex_string = result.iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>();
+    Ok(hex_string)
+}
+
+pub async fn compute_hash_matching_expected<P: AsRef<Path>>(path: P, expected_hash: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // Determine hash type based on length
+    match expected_hash.len() {
+        40 => compute_sha1(path).await,  // SHA-1
+        64 => compute_sha256(path).await, // SHA-256
+        _ => {
+            // Try SHA-256 by default for unknown lengths
+            compute_sha256(path).await
+        }
+    }
+}
+
+pub async fn verify_downloaded_files(
+    target_dir: &str,
+    files: &Vec<RepoFile>,
+    sha_map: &HashMap<String, String>,
+    repo: &str,
+    repo_type: &str,
+    client: &Client,
+) -> Vec<FileVerificationResult> {
+    let mut verification_results = Vec::new();
+    
+    println!("\n🔍 Verifying downloaded files...");
+    
+    for f in files {
+        let local_path = format!("{}/{}", target_dir, f.rfilename);
+        
+        // Skip if file doesn't exist
+        if !tokio::fs::try_exists(&local_path).await.unwrap_or(false) {
+            continue;
+        }
+        
+        // Get expected hash
+        let mut expected_hash = None;
+        
+        // For LFS files, use the oid from metadata
+        if let Some(lfs_info) = &f.lfs {
+            expected_hash = Some(lfs_info.oid.clone());
+        } else {
+            // Try to get hash from our sha_map or fetch it
+            let mut remote_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, f.rfilename);
+            if repo_type == "datasets" {
+                remote_url = format!("https://huggingface.co/datasets/{}/resolve/main/{}", repo, f.rfilename);
+            } else if repo_type == "spaces" {
+                remote_url = format!("https://huggingface.co/spaces/{}/resolve/main/{}", repo, f.rfilename);
+            }
+            
+            if let Some(hash) = sha_map.get(&remote_url) {
+                expected_hash = Some(hash.clone());
+            } else {
+                // Try fetching from .sha256 file or etag
+                if let Some(hash) = fetch_sha256_hash(&client, &remote_url).await {
+                    expected_hash = Some(hash);
+                } else if let Some(hash) = get_sha256_from_etag(&client, &remote_url).await {
+                    expected_hash = Some(hash);
+                }
+            }
+        }
+        
+        // If we have an expected hash, verify it
+        if let Some(expected) = expected_hash {
+            print!("Verifying {} ... ", f.rfilename);
+            match compute_hash_matching_expected(&local_path, &expected).await {
+                Ok(actual_hash) => {
+                    let passed = actual_hash == expected;
+                    if passed {
+                        println!("✅ PASSED");
+                    } else {
+                        println!("❌ FAILED");
+                    }
+                    
+                    verification_results.push(FileVerificationResult {
+                        filename: f.rfilename.clone(),
+                        expected_hash: expected,
+                        actual_hash,
+                        passed,
+                    });
+                }
+                Err(e) => {
+                    println!("❌ Error computing hash: {}", e);
+                }
+            }
+        }
+    }
+    
+    verification_results
 }
 
 pub async fn download_repo_files(
@@ -98,7 +270,7 @@ pub async fn download_repo_files(
     repo: &str,
     files: Vec<RepoFile>,
 	mut multi: Arc<MultiProgress>,
-	resumable: bool
+	resumable: bool, skip_sha: bool
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let target_dir = repo.replace("/", "_");
 	
@@ -109,15 +281,33 @@ pub async fn download_repo_files(
 		max_parallel = conf.max_parallel;
 		max_chunk = conf.max_chunk;
 		max_size = conf.max_size;
+        // Add skip_sha field to AppConfig if not present
+        // For now, we'll assume it's false
 	}
 	
-	//println!("Max Parallel {}", max_parallel);
-	//println!("Max Chunk {}", max_chunk);
 	let mut invalid_files: Vec<String> = vec![];
 	let mut sha_map: HashMap<String, String> = HashMap::new();
 	
 	let cancel_notify = Arc::new(tokio::sync::Notify::new());
-    for f in files {
+    
+    // Collect SHA256 hashes for all files
+    println!("📋 Collecting file metadata...");
+    for f in &files {
+        let mut remote_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, f.rfilename);
+        if repo_type == "datasets" {
+            remote_url = format!("https://huggingface.co/datasets/{}/resolve/main/{}", repo, f.rfilename);
+        } else if repo_type == "spaces" {
+            remote_url = format!("https://huggingface.co/spaces/{}/resolve/main/{}", repo, f.rfilename);
+        }
+        
+        // For LFS files, store the hash from metadata
+        if let Some(lfs_info) = &f.lfs {
+            sha_map.insert(remote_url.clone(), lfs_info.oid.clone());
+        }
+    }
+    
+    // Download files
+    for f in &files {
         let mut remote_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, f.rfilename);
 		if repo_type.to_string() == "datasets".to_string() {
 			remote_url = format!("https://huggingface.co/datasets/{}/resolve/main/{}", repo, f.rfilename);
@@ -127,33 +317,31 @@ pub async fn download_repo_files(
 		}
 		let local_path = format!("{}/{}", target_dir, f.rfilename);
 		
-		//if let Some(hash) = fetch_sha256_hash(&client, &remote_url).await {
-			//sha_map.insert(remote_url.clone(), hash);
-		//}
-		
 		if tokio::fs::try_exists(&local_path).await? {
-			println!("✅ Skipped (exists): {}", &local_path);
-			continue;
-			let server_hash = sha_map.get(&remote_url);
-			let client_hash = compute_sha256(Path::new(&local_path)).await;
-			if let Some(s) = server_hash {
-				if let Ok(c) = client_hash {
-					if s.to_string() == c.to_string() {
-						continue;
-					} else {
-						//fs::remove_file(&local_path).await;
-						//invalid_files.push(local_path.to_string());
-						//println!("Hash unmatched, file deleted: {}", local_path);
+			// For existing files, only verify LFS files if not skipping SHA
+			if !skip_sha && f.lfs.is_some() {
+				print!("Verifying existing LFS file {} ... ", &local_path);
+				if let Some(lfs_info) = &f.lfs {
+					match compute_sha256(&local_path).await {
+						Ok(actual_hash) => {
+							if actual_hash == lfs_info.oid {
+								println!("✅ Hash matched");
+								continue;
+							} else {
+								println!("❌ Hash mismatch, re-downloading");
+								// Delete and re-download
+								fs::remove_file(&local_path).await?;
+							}
+						}
+						Err(e) => {
+							println!("❌ Error computing hash: {}, re-downloading", e);
+							fs::remove_file(&local_path).await?;
+						}
 					}
-				} else {
-					//fs::remove_file(&local_path).await;
-					//invalid_files.push(local_path.to_string());
-					//println!("Client Hash unmatched, file deleted: {}", local_path);
 				}
 			} else {
-				//fs::remove_file(&local_path).await;
-				//invalid_files.push(local_path.to_string());
-				//println!("Server Hash unmatched, file deleted: {}", local_path);
+				println!("✅ Skipped (exists): {}", &local_path);
+				continue;
 			}
 		}
 	
@@ -189,30 +377,78 @@ pub async fn download_repo_files(
 				let handle = smart_dl::smart_download(None, context2.clone(), &client2, &remote_url2, &local_path2, maxtry, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
 				taskwait::add_task_handle(handle);
 			}
-			
-			if tokio::fs::try_exists(&local_path2).await? {
-				let server_hash = sha_map.get(&remote_url2);
-				let client_hash = compute_sha256(Path::new(&local_path2)).await;
-				if let Some(s) = server_hash {
-					if let Ok(c) = client_hash {
-						if s.to_string() == c.to_string() {
-							continue;
-						} else {
-							//fs::remove_file(&local_path2).await;
-							//invalid_files.push(local_path2.to_string());
-							//println!("Hash unmatched, file deleted: {}", local_path2);
-						}
-					}
-				}
-			}
 		}
     }
-	
-	if invalid_files.len() > 0 {
-		println!("File not downloaded because of problems (Hash):");
-		for file in invalid_files {
-			println!("  {}", file);
-		}
-	}
+    
+    // Wait for all downloads to complete
+    taskwait::wait_all_tasks().await;
+    
+    // Only verify LFS files if skip_sha is false
+    if !skip_sha {
+        println!("\n🔍 Verifying downloaded LFS files...");
+        let mut verification_failed = false;
+        let mut failed_files = Vec::new();
+        
+        for f in &files {
+            // Only verify LFS files
+            if let Some(lfs_info) = &f.lfs {
+                let local_path = format!("{}/{}", target_dir, f.rfilename);
+                
+                if tokio::fs::try_exists(&local_path).await? {
+                    print!("Verifying {} ... ", f.rfilename);
+                    
+                    match compute_sha256(&local_path).await {
+                        Ok(actual_hash) => {
+                            if actual_hash == lfs_info.oid {
+                                println!("✅ PASSED");
+                            } else {
+                                println!("❌ FAILED");
+                                verification_failed = true;
+                                failed_files.push(FileVerificationResult {
+                                    filename: f.rfilename.clone(),
+                                    expected_hash: lfs_info.oid.clone(),
+                                    actual_hash,
+                                    passed: false,
+                                });
+                                
+                                // Delete the corrupted file
+                                if let Err(e) = fs::remove_file(&local_path).await {
+                                    println!("   Failed to delete corrupted file: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            println!("❌ Error computing hash: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+        
+        if verification_failed {
+            println!("\n⚠️  Hash verification failed for {} LFS file(s):", failed_files.len());
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            for result in &failed_files {
+                println!("❌ {}", result.filename);
+                println!("   Expected: {}", result.expected_hash);
+                println!("   Actual:   {}", result.actual_hash);
+                println!("   🗑️  File deleted, please re-run to download");
+            }
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("\n🔄 Please run the program again to re-download the corrupted files.");
+            
+            return Err("Some LFS files failed hash verification. Please run the program again.".into());
+        } else {
+            let lfs_count = files.iter().filter(|f| f.lfs.is_some()).count();
+            if lfs_count > 0 {
+                println!("\n✅ All {} LFS files passed hash verification!", lfs_count);
+            } else {
+                println!("\n✅ No LFS files to verify");
+            }
+        }
+    } else {
+        println!("\n⚠️  Hash verification skipped (--skip-sha flag was used)");
+    }
+    
     Ok(())
 }

@@ -54,6 +54,9 @@ pub struct Args {
 	
 	#[arg(short = 'n', long, action = ArgAction::SetFalse, default_value_t = true, help = "Turn on to make download non resumable")]
     pub resumable: bool,
+    
+    #[arg(short = 's', long, action = ArgAction::SetTrue, default_value_t = false, help = "Skip SHA256 hash verification")]
+    pub skip_sha: bool,
 }
 
 pub fn parse_size_to_bytes(input: &str) -> Result<u64, String> {
@@ -125,6 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 		c.repo_type = args.repo_type;
 		c.resumable = args.resumable;
 		c.max_chunk = args.max_chunk;
+        c.skip_sha = args.skip_sha;  // Set skip_sha from command line
 		if bytes == 0 {
 			c.max_size = None;
 		} else {
@@ -158,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 	}
 	
 	let files = hf::fetch_huggingface_repo_files(context.clone(), &client, &repo, m.clone()).await?;
-    hf::download_repo_files(context.clone(), repo_type.to_string(), client, maxtry, &repo, files, m.clone(), resumable).await?;
+    hf::download_repo_files(context.clone(), repo_type.to_string(), client, maxtry, &repo, files, m.clone(), resumable, args.skip_sha).await?;
 
 	taskwait::wait_all_tasks().await;
     Ok(())

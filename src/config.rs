@@ -13,7 +13,8 @@ pub struct AppConfig {
 	pub max_chunk: u32,
 	pub max_size: Option<u64>,
 	pub repo_type: String,
-	pub resumable: bool
+	pub resumable: bool,
+    pub skip_sha: bool,  // Added skip_sha field
 }
 
 #[derive(Clone, Debug)]
@@ -43,7 +44,8 @@ impl Default for AppConfig {
 			max_chunk: 7,
 			repo_type: "models".to_string(),
 			max_size: None,
-			resumable: true
+			resumable: true,
+            skip_sha: false,  // Default to false for hash verification
         }
     }
 }
