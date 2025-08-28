@@ -4,7 +4,7 @@ A tiny Huggingface repository downloader.
 
 | Compulsory Switch      | Description                                       | Example                         | Description for example                             |
 | ---------------------- | ------------------------------------------------- | ------------------------------- | --------------------------------------------------- |
-| -j (repository         |  switch HuggingFace Repository                    | -j moonshotai/Kimi-K2-Instruct` | Kimi-K2 repository                                  |
+| -j (repository)        |  switch HuggingFace Repository                    | -j moonshotai/Kimi-K2-Instruct` | Kimi-K2 repository                                  |
 
 | Switch                 | Description                                       | Example                         | Description for example                             |
 | ---------------------- | ------------------------------------------------- | ------------------------------- | --------------------------------------------------- |
