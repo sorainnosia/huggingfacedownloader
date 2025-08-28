@@ -2,9 +2,9 @@
 
 A tiny Huggingface repository downloader.
 
-| Switch                 | Description                                       | Example                         | Description for example                             |
+| Compulsory Switch      | Description                                       | Example                         | Description for example                             |
 | ---------------------- | ------------------------------------------------- | ------------------------------- | --------------------------------------------------- |
-| -j (repository         | Compulsory switch HuggingFace Repository          | -j moonshotai/Kimi-K2-Instruct` | Kimi-K2 repository                                  |
+| -j (repository         |  switch HuggingFace Repository                    | -j moonshotai/Kimi-K2-Instruct` | Kimi-K2 repository                                  |
 
 | Switch                 | Description                                       | Example                         | Description for example                             |
 | ---------------------- | ------------------------------------------------- | ------------------------------- | --------------------------------------------------- |
