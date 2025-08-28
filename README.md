@@ -2,18 +2,18 @@
 
 A tiny Huggingface repository downloader.
 
-| Compulsory Switch      | Description                                       | Example                         | Description for example                             |
-| ---------------------- | ------------------------------------------------- | ------------------------------- | --------------------------------------------------- |
-| -j (repository)        | HuggingFace Repository                            | -j moonshotai/Kimi-K2-Instruct` | Kimi-K2 repository                                  |
+| Compulsory Switch      | Description                                       | Example                         | Description for example                              |
+| ---------------------- | ------------------------------------------------- | ------------------------------- | ---------------------------------------------------- |
+| -j (repository)        | HuggingFace Repository                            | -j moonshotai/Kimi-K2-Instruct` | Kimi-K2 repository                                   |
 
-| Switch                 | Description                                       | Example                         | Description for example                             |
-| ---------------------- | ------------------------------------------------- | ------------------------------- | --------------------------------------------------- |
-| (empty)                | Default to -m 1 -c 7                              |                                 |                                                     |
-| -m (number)            | Parallel files to download                        | -m 2                            | Download 2 files at once                            |
-| -c (chunks)            | Parallel chunks to download for each file         | -c 2                            | Download 2 chunks at once for each of file          |
-| -p (size in MB/GB/TB)  | Each chunk has fixed size                         | -p 100MB                        | Each chunk is maximum 100MB, parallel depends on -c |
-| -t (repository_types)  | `models` (default) `datasets` or `spaces`         | -t datasets                     | The repository is `datasets`                        |
-| -k (api_key)           | Repository requires permission or acknowledgement | -k s3cr3tap1k3y                 | Login having api key has permission to download     |
+| Switch                 | Description                                       | Example                         | Description for example                              |
+| ---------------------- | ------------------------------------------------- | ------------------------------- | ---------------------------------------------------- |
+| (empty)                | Default to -m 1 -c 7                              |                                 |                                                      |
+| -m (number)            | Parallel files to download                        | -m 2                            | Download 2 files at once default 1                   |
+| -c (number)            | Parallel chunks to download for each file         | -c 2                            | Download 2 chunks at once for each of file default 7 |
+| -p (size in MB/GB/TB)  | Each chunk has fixed size                         | -p 100MB                        | Each chunk is maximum 100MB, parallel depends on -c  |
+| -t (repository_types)  | `models` `datasets` or `spaces`                   | -t datasets                     | The repository is `datasets` default (default)       |
+| -k (api_key)           | Repository requires permission or acknowledgement | -k s3cr3tap1k3y                 | Login having api key has permission to download      |
 
 Download files from HuggingFace repository easily, support parallel files download by default `1` file at a time, to override use `-m 2` for 2 files at a time.
 If url supports range, the file will be downloaded parallel in chunks by default `7` chunks per file, to override use `-c 4` for 4 chunk.
