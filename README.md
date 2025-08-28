@@ -12,7 +12,7 @@ A tiny Huggingface repository downloader.
 | -m (number)            | Parallel files to download                        | -m 2                            | Download 2 files at once default 1                   |
 | -c (number)            | Parallel chunks to download for each file         | -c 2                            | Download 2 chunks at once for each of file default 7 |
 | -p (size in MB/GB/TB)  | Each chunk has fixed size                         | -p 100MB                        | Each chunk is maximum 100MB, parallel depends on -c  |
-| -t (repository_types)  | `models` `datasets` or `spaces`                   | -t datasets                     | The repository is `datasets` default (default)       |
+| -t (repository_types)  | `models` `datasets` or `spaces`                   | -t datasets                     | The repository is `datasets` default (`models`)      |
 | -k (api_key)           | Repository requires permission or acknowledgement | -k s3cr3tap1k3y                 | Login having api key has permission to download      |
 
 Download files from HuggingFace repository easily, support parallel files download by default `1` file at a time, to override use `-m 2` for 2 files at a time.
