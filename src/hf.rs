@@ -63,14 +63,6 @@ pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Cli
     let mut has_more = true;
     let mut page_count = 0;
     
-    println!("🔍 Fetching repository structure...");
-    
-    // Create a progress bar for fetching
-    let fetch_pb = multi.add(ProgressBar::new_spinner());
-    fetch_pb.set_style(ProgressStyle::default_spinner()
-        .template("{spinner:.green} {msg}")
-        .unwrap());
-    
     while has_more {
         // Construct URL with pagination support
         let url = if path_param.is_empty() {
@@ -78,8 +70,6 @@ pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Cli
         } else {
             format!("https://huggingface.co/api/{}/{}/tree/main?path={}", repo_type, repo, path_param)
         };
-        
-        fetch_pb.set_message(format!("Fetching page {}...", page_count + 1));
         
         let resp = client
             .get(&url)
@@ -132,7 +122,6 @@ pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Cli
         
         // Recursively fetch contents of each folder
         for folder in folders_to_explore {
-            fetch_pb.set_message(format!("Exploring folder: {}", folder));
             let folder_files = fetch_folder_contents(client, &repo_type, repo, &folder).await?;
             all_files.extend(folder_files);
         }
@@ -140,50 +129,10 @@ pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Cli
         page_count += 1;
     }
     
-    fetch_pb.finish_with_message(format!("Found {} files", all_files.len()));
-    
     // Sort files by path for better organization
     all_files.sort_by(|a, b| a.rfilename.cmp(&b.rfilename));
     
-    // Print summary
-    let lfs_count = all_files.iter().filter(|f| f.lfs.is_some()).count();
-    let total_size: i64 = all_files.iter()
-        .filter_map(|f| {
-            if let Some(lfs) = &f.lfs {
-                Some(lfs.size)
-            } else {
-                f.size
-            }
-        })
-        .sum();
-    
-    println!("📊 Repository summary:");
-    println!("   Total files: {}", all_files.len());
-    println!("   LFS files: {}", lfs_count);
-    println!("   Total size: {}", format_bytes(total_size));
-    
-    // Group by folders for display
-    let mut folder_counts: HashMap<String, usize> = HashMap::new();
-    for file in &all_files {
-        if let Some(folder) = Path::new(&file.rfilename).parent() {
-            let folder_str = folder.to_string_lossy().to_string();
-            if !folder_str.is_empty() {
-                *folder_counts.entry(folder_str).or_insert(0) += 1;
-            }
-        }
-    }
-    
-    if !folder_counts.is_empty() {
-        println!("   Folders found:");
-        let mut folders: Vec<_> = folder_counts.iter().collect();
-        folders.sort_by_key(|&(path, _)| path);
-        for (folder, count) in folders.iter().take(10) {
-            println!("     📁 {}: {} files", folder, count);
-        }
-        if folders.len() > 10 {
-            println!("     ... and {} more folders", folders.len() - 10);
-        }
-    }
+    println!("Found {} files, {} with LFS", all_files.len(), all_files.iter().filter(|f| f.lfs.is_some()).count());
     
     Ok(all_files)
 }
@@ -297,16 +246,28 @@ pub async fn get_sha256_from_etag(client: &Client, url: &str) -> Option<String> 
 
 pub async fn compute_sha256<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let file = File::open(path).await?;
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::with_capacity(1024 * 1024, file); // 1MB buffer for performance
     let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 1024 * 1024]; // 1MB chunks
 
     loop {
-        let n = reader.read(&mut buffer).await?;
-        if n == 0 {
-            break;
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            reader.read(&mut buffer)
+        ).await {
+            Ok(Ok(n)) => {
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..n]);
+            }
+            Ok(Err(e)) => {
+                return Err(Box::new(e));
+            }
+            Err(_) => {
+                return Err("Hash computation timed out".into());
+            }
         }
-        hasher.update(&buffer[..n]);
     }
 
     let result = hasher.finalize();
@@ -319,16 +280,28 @@ pub async fn compute_sha256<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn s
 
 pub async fn compute_sha1<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let file = File::open(path).await?;
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::with_capacity(1024 * 1024, file); // 1MB buffer for performance
     let mut hasher = Sha1::new();
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 1024 * 1024]; // 1MB chunks
 
     loop {
-        let n = reader.read(&mut buffer).await?;
-        if n == 0 {
-            break;
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            reader.read(&mut buffer)
+        ).await {
+            Ok(Ok(n)) => {
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..n]);
+            }
+            Ok(Err(e)) => {
+                return Err(Box::new(e));
+            }
+            Err(_) => {
+                return Err("Hash computation timed out".into());
+            }
         }
-        hasher.update(&buffer[..n]);
     }
 
     let result = hasher.finalize();
@@ -455,16 +428,7 @@ pub async fn download_repo_files(
     let cancel_notify = Arc::new(tokio::sync::Notify::new());
     
     // Collect SHA256 hashes for all files
-    println!("\n📋 Preparing downloads...");
-    
-    // Create progress bar for preparation
-    let prep_pb = multi.add(ProgressBar::new(files.len() as u64));
-    prep_pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-        .unwrap()
-        .progress_chars("#>-"));
-    prep_pb.set_message("Collecting metadata");
-    
+    println!("📋 Collecting file metadata...");
     for f in &files {
         let mut remote_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, f.rfilename);
         if repo_type == "datasets" {
@@ -477,16 +441,10 @@ pub async fn download_repo_files(
         if let Some(lfs_info) = &f.lfs {
             sha_map.insert(remote_url.clone(), lfs_info.oid.clone());
         }
-        
-        prep_pb.inc(1);
     }
     
-    prep_pb.finish_with_message("Metadata collected");
-    
-    println!("\n📥 Starting downloads...");
-    
     // Download files
-    for (idx, f) in files.iter().enumerate() {
+    for f in &files {
         let mut remote_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, f.rfilename);
         if repo_type.to_string() == "datasets".to_string() {
             remote_url = format!("https://huggingface.co/datasets/{}/resolve/main/{}", repo, f.rfilename);
@@ -496,14 +454,22 @@ pub async fn download_repo_files(
         }
         let local_path = format!("{}/{}", target_dir, f.rfilename);
         
-        // Check if file exists and verify if needed
         if tokio::fs::try_exists(&local_path).await? {
             // For existing files, only verify LFS files if not skipping SHA
             if !skip_sha && f.lfs.is_some() {
-                print!("[{}/{}] Verifying existing LFS file {} ... ", idx + 1, files.len(), &f.rfilename);
+                print!("Verifying existing LFS file {} ... ", &local_path);
                 if let Some(lfs_info) = &f.lfs {
-                    match compute_sha256(&local_path).await {
-                        Ok(actual_hash) => {
+                    // Skip verification for very large files (> 5GB)
+                    if lfs_info.size > 5 * 1024 * 1024 * 1024 {
+                        println!("skipped (file too large)");
+                        continue;
+                    }
+                    
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(300), // 5 minute timeout
+                        compute_sha256(&local_path)
+                    ).await {
+                        Ok(Ok(actual_hash)) => {
                             if actual_hash == lfs_info.oid {
                                 println!("✅ Hash matched");
                                 continue;
@@ -513,19 +479,22 @@ pub async fn download_repo_files(
                                 fs::remove_file(&local_path).await?;
                             }
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             println!("❌ Error computing hash: {}, re-downloading", e);
                             fs::remove_file(&local_path).await?;
+                        }
+                        Err(_) => {
+                            println!("timeout, skipping");
+                            continue;
                         }
                     }
                 }
             } else {
-                println!("[{}/{}] ✅ Skipped (exists): {}", idx + 1, files.len(), &f.rfilename);
+                println!("✅ Skipped (exists): {}", &local_path);
                 continue;
             }
         }
-        
-        // Create parent directories if they don't exist
+    
         if let Some(parent) = std::path::Path::new(&local_path).parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -536,8 +505,6 @@ pub async fn download_repo_files(
                 return Ok(());
             }
         }
-        
-        println!("[{}/{}] Downloading: {}", idx + 1, files.len(), &f.rfilename);
         
         {
             let context2 = context.clone();
@@ -578,10 +545,18 @@ pub async fn download_repo_files(
                 let local_path = format!("{}/{}", target_dir, f.rfilename);
                 
                 if tokio::fs::try_exists(&local_path).await? {
+                    // Skip verification for very large files
+                    if lfs_info.size > 5 * 1024 * 1024 * 1024 {
+                        continue;
+                    }
+                    
                     print!("Verifying {} ... ", f.rfilename);
                     
-                    match compute_sha256(&local_path).await {
-                        Ok(actual_hash) => {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(300), // 5 minute timeout
+                        compute_sha256(&local_path)
+                    ).await {
+                        Ok(Ok(actual_hash)) => {
                             if actual_hash == lfs_info.oid {
                                 println!("✅ PASSED");
                             } else {
@@ -600,8 +575,11 @@ pub async fn download_repo_files(
                                 }
                             }
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             println!("❌ Error computing hash: {}", e);
+                        }
+                        Err(_) => {
+                            println!("timeout");
                         }
                     }
                 }
@@ -632,12 +610,6 @@ pub async fn download_repo_files(
     } else {
         println!("\n⚠️  Hash verification skipped (--skip-sha flag was used)");
     }
-    
-    // Print download summary
-    println!("\n📊 Download complete!");
-    println!("   Repository: {}", repo);
-    println!("   Total files: {}", files.len());
-    println!("   Output directory: {}", target_dir);
     
     Ok(())
 }
