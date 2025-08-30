@@ -22,6 +22,8 @@ pub struct RepoFile {
     pub rfilename: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lfs: Option<LfsInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,17 +42,166 @@ pub struct FileVerificationResult {
     pub passed: bool,
 }
 
-pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Client, repo: &str, mut multi: Arc<MultiProgress>) -> Result<Vec<RepoFile>, Box<dyn std::error::Error + Send + Sync>> {
-	let mut repo_type = "models".to_string();
-	if let Some(c) = &context.config {
-		repo_type = c.repo_type.to_string();
-	}
-	
-    // Use the /tree/main endpoint to get file listings with LFS info
-    let url = format!("https://huggingface.co/api/{}/{}/tree/main", repo_type, repo);
-    
-    //println!("Fetching file list from: {}", url);
+// Add struct for API response parsing
+#[derive(Debug, Deserialize)]
+struct ApiFileInfo {
+    #[serde(rename = "type")]
+    file_type: String,
+    path: String,
+    size: Option<i64>,
+    lfs: Option<LfsInfo>,
+}
 
+pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Client, repo: &str, mut multi: Arc<MultiProgress>) -> Result<Vec<RepoFile>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut repo_type = "models".to_string();
+    if let Some(c) = &context.config {
+        repo_type = c.repo_type.to_string();
+    }
+    
+    let mut all_files = Vec::new();
+    let mut path_param = String::new();
+    let mut has_more = true;
+    let mut page_count = 0;
+    
+    println!("🔍 Fetching repository structure...");
+    
+    // Create a progress bar for fetching
+    let fetch_pb = multi.add(ProgressBar::new_spinner());
+    fetch_pb.set_style(ProgressStyle::default_spinner()
+        .template("{spinner:.green} {msg}")
+        .unwrap());
+    
+    while has_more {
+        // Construct URL with pagination support
+        let url = if path_param.is_empty() {
+            format!("https://huggingface.co/api/{}/{}/tree/main", repo_type, repo)
+        } else {
+            format!("https://huggingface.co/api/{}/{}/tree/main?path={}", repo_type, repo, path_param)
+        };
+        
+        fetch_pb.set_message(format!("Fetching page {}...", page_count + 1));
+        
+        let resp = client
+            .get(&url)
+            .header("User-Agent", "huggingface-downloader")
+            .send()
+            .await?;
+            
+        if !resp.status().is_success() {
+            // If we get 404, it might mean the repository doesn't exist or is private
+            if resp.status().as_u16() == 404 {
+                return Err(format!("Repository not found or private: {}/{}", repo_type, repo).into());
+            }
+            return Err(format!("Failed to fetch repo files: HTTP {}", resp.status()).into());
+        }
+        
+        let json_resp = resp.json::<Vec<ApiFileInfo>>().await?;
+        
+        // Check if we got any results
+        if json_resp.is_empty() {
+            has_more = false;
+            continue;
+        }
+        
+        // Process files and folders
+        let mut folders_to_explore = Vec::new();
+        
+        for item in json_resp {
+            match item.file_type.as_str() {
+                "file" => {
+                    // Add file to our list
+                    all_files.push(RepoFile {
+                        rfilename: item.path.clone(),
+                        lfs: item.lfs,
+                        size: item.size,
+                    });
+                }
+                "directory" => {
+                    // Add folder to explore
+                    folders_to_explore.push(item.path);
+                }
+                _ => {
+                    // Unknown type, skip
+                }
+            }
+        }
+        
+        // For simplicity, we'll fetch one level at a time
+        // In a more sophisticated implementation, we could parallelize this
+        has_more = false; // We'll handle folders separately
+        
+        // Recursively fetch contents of each folder
+        for folder in folders_to_explore {
+            fetch_pb.set_message(format!("Exploring folder: {}", folder));
+            let folder_files = fetch_folder_contents(client, &repo_type, repo, &folder).await?;
+            all_files.extend(folder_files);
+        }
+        
+        page_count += 1;
+    }
+    
+    fetch_pb.finish_with_message(format!("Found {} files", all_files.len()));
+    
+    // Sort files by path for better organization
+    all_files.sort_by(|a, b| a.rfilename.cmp(&b.rfilename));
+    
+    // Print summary
+    let lfs_count = all_files.iter().filter(|f| f.lfs.is_some()).count();
+    let total_size: i64 = all_files.iter()
+        .filter_map(|f| {
+            if let Some(lfs) = &f.lfs {
+                Some(lfs.size)
+            } else {
+                f.size
+            }
+        })
+        .sum();
+    
+    println!("📊 Repository summary:");
+    println!("   Total files: {}", all_files.len());
+    println!("   LFS files: {}", lfs_count);
+    println!("   Total size: {}", format_bytes(total_size));
+    
+    // Group by folders for display
+    let mut folder_counts: HashMap<String, usize> = HashMap::new();
+    for file in &all_files {
+        if let Some(folder) = Path::new(&file.rfilename).parent() {
+            let folder_str = folder.to_string_lossy().to_string();
+            if !folder_str.is_empty() {
+                *folder_counts.entry(folder_str).or_insert(0) += 1;
+            }
+        }
+    }
+    
+    if !folder_counts.is_empty() {
+        println!("   Folders found:");
+        let mut folders: Vec<_> = folder_counts.iter().collect();
+        folders.sort_by_key(|&(path, _)| path);
+        for (folder, count) in folders.iter().take(10) {
+            println!("     📁 {}: {} files", folder, count);
+        }
+        if folders.len() > 10 {
+            println!("     ... and {} more folders", folders.len() - 10);
+        }
+    }
+    
+    Ok(all_files)
+}
+
+// Helper function to recursively fetch folder contents
+async fn fetch_folder_contents(
+    client: &Client,
+    repo_type: &str,
+    repo: &str,
+    folder_path: &str,
+) -> Result<Vec<RepoFile>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut files = Vec::new();
+    
+    let url = format!(
+        "https://huggingface.co/api/{}/{}/tree/main/{}",
+        repo_type, repo, folder_path
+    );
+    
     let resp = client
         .get(&url)
         .header("User-Agent", "huggingface-downloader")
@@ -58,40 +209,54 @@ pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Cli
         .await?;
         
     if !resp.status().is_success() {
-        return Err(format!("Failed to fetch repo files: HTTP {}", resp.status()).into());
+        // Folder might be empty or inaccessible, skip it
+        return Ok(files);
     }
     
-    let json_resp = resp.json::<Vec<serde_json::Value>>().await?;
+    let json_resp = resp.json::<Vec<ApiFileInfo>>().await?;
     
-    // Debug: print first file to see structure
-    if !json_resp.is_empty() {
-        //println!("Sample file structure: {:#?}", &json_resp[0]);
-    }
-    
-    // Convert JSON array to Vec<RepoFile>
-    let mut files = Vec::new();
     for item in json_resp {
-        // The API returns files with "path" field, but we expect "rfilename"
-        if let Some(path) = item.get("path").and_then(|p| p.as_str()) {
-            let mut file = RepoFile {
-                rfilename: path.to_string(),
-                lfs: None,
-            };
-            
-            // Check if there's an lfs field
-            if let Some(lfs_data) = item.get("lfs") {
-                if let Ok(lfs_info) = serde_json::from_value::<LfsInfo>(lfs_data.clone()) {
-                    file.lfs = Some(lfs_info);
-                }
+        match item.file_type.as_str() {
+            "file" => {
+                files.push(RepoFile {
+                    rfilename: item.path.clone(),
+                    lfs: item.lfs,
+                    size: item.size,
+                });
             }
-            
-            files.push(file);
+            "directory" => {
+                // Recursively fetch subfolder contents
+                let subfolder_files = Box::pin(fetch_folder_contents(
+                    client,
+                    repo_type,
+                    repo,
+                    &item.path,
+                )).await?;
+                files.extend(subfolder_files);
+            }
+            _ => {}
         }
     }
     
-    println!("Found {} files, {} with LFS", files.len(), files.iter().filter(|f| f.lfs.is_some()).count());
-    
     Ok(files)
+}
+
+// Helper function to format bytes in human-readable format
+fn format_bytes(bytes: i64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB", "PB"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+    
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+    
+    if unit_index == 0 {
+        format!("{} {}", size as i64, UNITS[unit_index])
+    } else {
+        format!("{:.2} {}", size, UNITS[unit_index])
+    }
 }
 
 pub async fn fetch_sha256_hash(client: &Client, url: &str) -> Option<String> {
@@ -263,35 +428,43 @@ pub async fn verify_downloaded_files(
 }
 
 pub async fn download_repo_files(
-	context: Arc<AppContext>,
-	repo_type: String,
+    context: Arc<AppContext>,
+    repo_type: String,
     client: reqwest::Client,
-	maxtry: u32,
+    maxtry: u32,
     repo: &str,
     files: Vec<RepoFile>,
-	mut multi: Arc<MultiProgress>,
-	resumable: bool, skip_sha: bool
+    mut multi: Arc<MultiProgress>,
+    resumable: bool,
+    skip_sha: bool
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let target_dir = repo.replace("/", "_");
-	
-	let mut max_parallel = 4;
-	let mut max_chunk = 4;
-	let mut max_size = None;
-	if let Some(conf) = &context.config {
-		max_parallel = conf.max_parallel;
-		max_chunk = conf.max_chunk;
-		max_size = conf.max_size;
-        // Add skip_sha field to AppConfig if not present
-        // For now, we'll assume it's false
-	}
-	
-	let mut invalid_files: Vec<String> = vec![];
-	let mut sha_map: HashMap<String, String> = HashMap::new();
-	
-	let cancel_notify = Arc::new(tokio::sync::Notify::new());
+    
+    let mut max_parallel = 4;
+    let mut max_chunk = 4;
+    let mut max_size = None;
+    if let Some(conf) = &context.config {
+        max_parallel = conf.max_parallel;
+        max_chunk = conf.max_chunk;
+        max_size = conf.max_size;
+    }
+    
+    let mut invalid_files: Vec<String> = vec![];
+    let mut sha_map: HashMap<String, String> = HashMap::new();
+    
+    let cancel_notify = Arc::new(tokio::sync::Notify::new());
     
     // Collect SHA256 hashes for all files
-    println!("📋 Collecting file metadata...");
+    println!("\n📋 Preparing downloads...");
+    
+    // Create progress bar for preparation
+    let prep_pb = multi.add(ProgressBar::new(files.len() as u64));
+    prep_pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+        .unwrap()
+        .progress_chars("#>-"));
+    prep_pb.set_message("Collecting metadata");
+    
     for f in &files {
         let mut remote_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, f.rfilename);
         if repo_type == "datasets" {
@@ -304,80 +477,90 @@ pub async fn download_repo_files(
         if let Some(lfs_info) = &f.lfs {
             sha_map.insert(remote_url.clone(), lfs_info.oid.clone());
         }
+        
+        prep_pb.inc(1);
     }
     
+    prep_pb.finish_with_message("Metadata collected");
+    
+    println!("\n📥 Starting downloads...");
+    
     // Download files
-    for f in &files {
+    for (idx, f) in files.iter().enumerate() {
         let mut remote_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, f.rfilename);
-		if repo_type.to_string() == "datasets".to_string() {
-			remote_url = format!("https://huggingface.co/datasets/{}/resolve/main/{}", repo, f.rfilename);
-		}
-		if repo_type.to_string() == "spaces".to_string() {
-			remote_url = format!("https://huggingface.co/spaces/{}/resolve/main/{}", repo, f.rfilename);
-		}
-		let local_path = format!("{}/{}", target_dir, f.rfilename);
-		
-		if tokio::fs::try_exists(&local_path).await? {
-			// For existing files, only verify LFS files if not skipping SHA
-			if !skip_sha && f.lfs.is_some() {
-				print!("Verifying existing LFS file {} ... ", &local_path);
-				if let Some(lfs_info) = &f.lfs {
-					match compute_sha256(&local_path).await {
-						Ok(actual_hash) => {
-							if actual_hash == lfs_info.oid {
-								println!("✅ Hash matched");
-								continue;
-							} else {
-								println!("❌ Hash mismatch, re-downloading");
-								// Delete and re-download
-								fs::remove_file(&local_path).await?;
-							}
-						}
-						Err(e) => {
-							println!("❌ Error computing hash: {}, re-downloading", e);
-							fs::remove_file(&local_path).await?;
-						}
-					}
-				}
-			} else {
-				println!("✅ Skipped (exists): {}", &local_path);
-				continue;
-			}
-		}
-	
+        if repo_type.to_string() == "datasets".to_string() {
+            remote_url = format!("https://huggingface.co/datasets/{}/resolve/main/{}", repo, f.rfilename);
+        }
+        if repo_type.to_string() == "spaces".to_string() {
+            remote_url = format!("https://huggingface.co/spaces/{}/resolve/main/{}", repo, f.rfilename);
+        }
+        let local_path = format!("{}/{}", target_dir, f.rfilename);
+        
+        // Check if file exists and verify if needed
+        if tokio::fs::try_exists(&local_path).await? {
+            // For existing files, only verify LFS files if not skipping SHA
+            if !skip_sha && f.lfs.is_some() {
+                print!("[{}/{}] Verifying existing LFS file {} ... ", idx + 1, files.len(), &f.rfilename);
+                if let Some(lfs_info) = &f.lfs {
+                    match compute_sha256(&local_path).await {
+                        Ok(actual_hash) => {
+                            if actual_hash == lfs_info.oid {
+                                println!("✅ Hash matched");
+                                continue;
+                            } else {
+                                println!("❌ Hash mismatch, re-downloading");
+                                // Delete and re-download
+                                fs::remove_file(&local_path).await?;
+                            }
+                        }
+                        Err(e) => {
+                            println!("❌ Error computing hash: {}, re-downloading", e);
+                            fs::remove_file(&local_path).await?;
+                        }
+                    }
+                }
+            } else {
+                println!("[{}/{}] ✅ Skipped (exists): {}", idx + 1, files.len(), &f.rfilename);
+                continue;
+            }
+        }
+        
+        // Create parent directories if they don't exist
         if let Some(parent) = std::path::Path::new(&local_path).parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-		
-		{
-			let run = *taskwait::ISRUNNING.lock().unwrap();
-			if run == false {
-				return Ok(());
-			}
-		}
-		
-		{
-			let context2 = context.clone();
-			let client2 = client.clone();
-			let remote_url2 = remote_url.clone();
-			let local_path2 = local_path.clone();
-			let multi2 = multi.clone();
-			
-			let ct = context.taskwait.clone();
-			let tw = &mut *ct.lock().unwrap();
-			
-			if let Some(c) = tw {
-				let permit: OwnedSemaphorePermit = c.acquire_owned().await?;
+        
+        {
+            let run = *taskwait::ISRUNNING.lock().unwrap();
+            if run == false {
+                return Ok(());
+            }
+        }
+        
+        println!("[{}/{}] Downloading: {}", idx + 1, files.len(), &f.rfilename);
+        
+        {
+            let context2 = context.clone();
+            let client2 = client.clone();
+            let remote_url2 = remote_url.clone();
+            let local_path2 = local_path.clone();
+            let multi2 = multi.clone();
+            
+            let ct = context.taskwait.clone();
+            let tw = &mut *ct.lock().unwrap();
+            
+            if let Some(c) = tw {
+                let permit: OwnedSemaphorePermit = c.acquire_owned().await?;
 
-				let handle = smart_dl::smart_download(Some(permit), context2.clone(), &client2, &remote_url2, &local_path2, maxtry, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
-				taskwait::add_task_handle(handle);
-			} else {
-				taskwait::wait_available_thread(max_parallel as i32);
+                let handle = smart_dl::smart_download(Some(permit), context2.clone(), &client2, &remote_url2, &local_path2, maxtry, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
+                taskwait::add_task_handle(handle);
+            } else {
+                taskwait::wait_available_thread(max_parallel as i32);
 
-				let handle = smart_dl::smart_download(None, context2.clone(), &client2, &remote_url2, &local_path2, maxtry, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
-				taskwait::add_task_handle(handle);
-			}
-		}
+                let handle = smart_dl::smart_download(None, context2.clone(), &client2, &remote_url2, &local_path2, maxtry, max_parallel as usize, max_chunk as usize, max_size.clone(), cancel_notify.clone(), multi.clone(), resumable).await;
+                taskwait::add_task_handle(handle);
+            }
+        }
     }
     
     // Wait for all downloads to complete
@@ -427,14 +610,14 @@ pub async fn download_repo_files(
         
         if verification_failed {
             println!("\n⚠️  Hash verification failed for {} LFS file(s):", failed_files.len());
-            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("┌─────────────────────────────────────────");
             for result in &failed_files {
                 println!("❌ {}", result.filename);
                 println!("   Expected: {}", result.expected_hash);
                 println!("   Actual:   {}", result.actual_hash);
                 println!("   🗑️  File deleted, please re-run to download");
             }
-            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("└─────────────────────────────────────────");
             println!("\n🔄 Please run the program again to re-download the corrupted files.");
             
             return Err("Some LFS files failed hash verification. Please run the program again.".into());
@@ -449,6 +632,12 @@ pub async fn download_repo_files(
     } else {
         println!("\n⚠️  Hash verification skipped (--skip-sha flag was used)");
     }
+    
+    // Print download summary
+    println!("\n📊 Download complete!");
+    println!("   Repository: {}", repo);
+    println!("   Total files: {}", files.len());
+    println!("   Output directory: {}", target_dir);
     
     Ok(())
 }
