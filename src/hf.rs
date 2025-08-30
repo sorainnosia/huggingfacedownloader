@@ -246,7 +246,7 @@ pub async fn get_sha256_from_etag(client: &Client, url: &str) -> Option<String> 
 
 pub async fn compute_sha256<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let file = File::open(path).await?;
-    let mut reader = BufReader::with_capacity(1024 * 1024, file); // 1MB buffer for performance
+    let mut reader = BufReader::with_capacity(10 * 1024 * 1024, file); // 1MB buffer for performance
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 1024 * 1024]; // 1MB chunks
 
@@ -280,7 +280,7 @@ pub async fn compute_sha256<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn s
 
 pub async fn compute_sha1<P: AsRef<Path>>(path: P) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let file = File::open(path).await?;
-    let mut reader = BufReader::with_capacity(1024 * 1024, file); // 1MB buffer for performance
+    let mut reader = BufReader::with_capacity(10 * 1024 * 1024, file); // 1MB buffer for performance
     let mut hasher = Sha1::new();
     let mut buffer = vec![0u8; 1024 * 1024]; // 1MB chunks
 
