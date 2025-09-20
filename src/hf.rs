@@ -460,10 +460,10 @@ pub async fn download_repo_files(
                 print!("Verifying existing LFS file {} ... ", &local_path);
                 if let Some(lfs_info) = &f.lfs {
                     // Skip verification for very large files (> 5GB)
-                    if lfs_info.size > 5 * 1024 * 1024 * 1024 {
-                        println!("skipped (file too large)");
-                        continue;
-                    }
+                    //if lfs_info.size > 5 * 1024 * 1024 * 1024 {
+                    //    println!("skipped (file too large)");
+                    //    continue;
+                    //}
                     
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(300), // 5 minute timeout
