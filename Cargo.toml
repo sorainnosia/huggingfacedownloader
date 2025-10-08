@@ -20,6 +20,7 @@ anyhow = "1"
 lazy_static = "1.5.0"
 sha1 = "0.10"
 sha2 = "0.10"
+urlencoding = "2.1"
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-Ctarget-feature=+crt-static"]
@@ -42,4 +43,5 @@ lto = true          # Enable link-time optimization
 codegen-units = 1   # Reduce number of codegen units to increase optimizations
 panic = 'abort'     # Abort on panic
 #strip = true        # Strip symbols from binary*
+
 
