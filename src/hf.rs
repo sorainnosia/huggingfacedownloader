@@ -52,6 +52,16 @@ struct ApiFileInfo {
     lfs: Option<LfsInfo>,
 }
 
+// Helper function to URL encode path components
+fn url_encode_path(path: &str) -> String {
+    path.split('/')
+        .map(|component| {
+            urlencoding::encode(component).into_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Client, repo: &str, mut multi: Arc<MultiProgress>) -> Result<Vec<RepoFile>, Box<dyn std::error::Error + Send + Sync>> {
     let mut repo_type = "models".to_string();
     if let Some(c) = &context.config {
@@ -122,6 +132,7 @@ pub async fn fetch_huggingface_repo_files(context: Arc<AppContext>, client: &Cli
         
         // Recursively fetch contents of each folder
         for folder in folders_to_explore {
+            println!("📁 Exploring folder: {}", folder);
             let folder_files = fetch_folder_contents(client, &repo_type, repo, &folder).await?;
             all_files.extend(folder_files);
         }
@@ -146,9 +157,12 @@ async fn fetch_folder_contents(
 ) -> Result<Vec<RepoFile>, Box<dyn std::error::Error + Send + Sync>> {
     let mut files = Vec::new();
     
+    // URL encode the folder path
+    let encoded_path = url_encode_path(folder_path);
+    
     let url = format!(
         "https://huggingface.co/api/{}/{}/tree/main/{}",
-        repo_type, repo, folder_path
+        repo_type, repo, encoded_path
     );
     
     let resp = client
@@ -158,7 +172,8 @@ async fn fetch_folder_contents(
         .await?;
         
     if !resp.status().is_success() {
-        // Folder might be empty or inaccessible, skip it
+        // Log the error but continue - folder might be empty or inaccessible
+        eprintln!("⚠️  Warning: Could not access folder '{}': HTTP {}", folder_path, resp.status());
         return Ok(files);
     }
     
@@ -175,6 +190,7 @@ async fn fetch_folder_contents(
             }
             "directory" => {
                 // Recursively fetch subfolder contents
+                println!("📁 Exploring subfolder: {}", item.path);
                 let subfolder_files = Box::pin(fetch_folder_contents(
                     client,
                     repo_type,
@@ -495,8 +511,12 @@ pub async fn download_repo_files(
             }
         }
     
+        // Create parent directories if they don't exist
         if let Some(parent) = std::path::Path::new(&local_path).parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                eprintln!("❌ Error creating directory {:?}: {}", parent, e);
+                continue;
+            }
         }
         
         {
